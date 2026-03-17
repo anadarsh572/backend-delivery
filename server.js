@@ -8,7 +8,10 @@ const jwt = require('jsonwebtoken');
 const app = express();
 app.use(cors({
     origin: 'https://frontend-delivery-sooty.vercel.app',
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
+    credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
@@ -306,16 +309,6 @@ app.delete('/api/admin/users/:id', authenticateToken, authorizeAdmin, async (req
 // تشغيل السيرفر
 // ==========================================
 const PORT = process.env.PORT || 5000;
-// --- جلب كل المنتجات (للعرض في الصفحة الرئيسية) ---
-app.get('/api/products', async (req, res) => {
-    try {
-        const allProducts = await pool.query("SELECT * FROM products ORDER BY id DESC");
-        res.json(allProducts.rows);
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).json({ error: "تعذر جلب المنتجات" });
-    }
-});
 // --- 12. جلب المنتجات للجميع (Public API) ---
 // الزائر والعميل والأدمن كلهم يقدروا يشوفوا المنتجات هنا
 app.get('/api/products', async (req, res) => {
