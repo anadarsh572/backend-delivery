@@ -201,7 +201,7 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
             );
         }
 
-        res.status(201).json({ message: "تم إرسال الطلب للمطعم بنجاح!", orderId });
+        res.status(200).json({ status: "success", message: "تم استقبال الطلب بنجاح وحفظه في قاعدة البيانات", orderId });
     } catch (err) {
         console.error("خطأ في إنشاء الطلب:", err.message);
         res.status(500).json({ error: "حصلت مشكلة واحنا بنأكد الطلب" });
