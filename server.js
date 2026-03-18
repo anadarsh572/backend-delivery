@@ -51,8 +51,8 @@ const authorizeAdmin = (req, res, next) => {
     }
 };
 // بوديجارد البائع
-const authorizeVendor = (req, res, next) => {
-    if (req.user && (req.user.role === 'vendor' || req.user.role === 'admin')) {
+const authorizeSeller = (req, res, next) => {
+    if (req.user && (req.user.role === 'seller' || req.user.role === 'admin')) {
         next();
     } else {
         res.status(403).json({ error: "لازم تكون صاحب مطعم عشان تدخل هنا" });
@@ -60,7 +60,7 @@ const authorizeVendor = (req, res, next) => {
 };
 
 // API لجلب طلبات مطعم معين فقط (للبائع)
-app.get('/api/vendor/my-orders', authenticateToken, authorizeVendor, async (req, res) => {
+app.get('/api/vendor/my-orders', authenticateToken, authorizeSeller, async (req, res) => {
     try {
         // req.user.id هو الـ ID بتاع البائع اللي جاي من التوكن
         const result = await pool.query(
@@ -80,14 +80,30 @@ app.get('/api/vendor/my-orders', authenticateToken, authorizeVendor, async (req,
 app.post('/api/register', async (req, res) => {
     try {
         const { name, email, phone, role, address, password } = req.body;
+        
+        // التحقق من نوع الحساب المختار
+        let finalRole = 'user';
+        let is_active = true;
+        
+        if (role === 'seller' || role === 'vendor' || role === 'بائع') {
+            finalRole = 'seller';
+            is_active = true;
+        }
+
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
+        
         const newUser = await pool.query(
-            "INSERT INTO users (name, email, phone, role, address, password) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email, role",
-            [name, email, phone, role || 'customer', address, hashedPassword]
+            "INSERT INTO users (name, email, phone, role, address, password, is_active) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, name, email, role, is_active",
+            [name, email, phone, finalRole, address, hashedPassword, is_active]
         );
-        res.status(201).json({ message: "Account created successfully!", user: newUser.rows[0] });
+        res.status(201).json({ 
+            message: "Account created successfully!", 
+            user: newUser.rows[0],
+            status: finalRole === 'seller' ? 'active' : 'pending' // Based on user's wording
+        });
     } catch (err) {
+        console.error(err.message);
         res.status(500).json({ error: "Email or phone already exists." });
     }
 });
@@ -325,7 +341,7 @@ app.listen(PORT, () => {
 });
 
 // --- 14. إضافة منتج جديد للمطعم (خاص بالبائع) ---
-app.post('/api/vendor/products', authenticateToken, authorizeVendor, async (req, res) => {
+app.post('/api/vendor/products', authenticateToken, authorizeSeller, async (req, res) => {
     try {
         const { name, description, price, image_url } = req.body;
         const ownerId = req.user.id; // هويّة الشخص اللي باعت الطلب
@@ -393,7 +409,7 @@ app.post('/api/admin/notify-vendor', authenticateToken, authorizeAdmin, async (r
 });
 
 // --- 17. دفع الاشتراك وتجديد الباقة (للبائع) ---
-app.post('/api/vendor/pay-subscription', authenticateToken, authorizeVendor, async (req, res) => {
+app.post('/api/vendor/pay-subscription', authenticateToken, authorizeSeller, async (req, res) => {
     try {
         const vendor_id = req.user.id;
         const subscription_fee = 500; // حدد قيمة الاشتراك اللي تعجبك (مثلاً 500 جنيه)
