@@ -16,9 +16,12 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// ده السطر السحري اللي بيربط الاثنين (محلي وسحابي)
+const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:M.Drakola7@localhost:5432/delivery_db';
+
 const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+  connectionString: connectionString,
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
 
 // ==========================================
