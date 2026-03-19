@@ -16,12 +16,11 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// ده السطر السحري اللي بيربط الاثنين (محلي وسحابي)
-const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:M.Drakola7@localhost:5432/delivery_db';
+const connectionString = process.env.DATABASE_URL;
 
 const pool = new Pool({
   connectionString: connectionString,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+  ssl: connectionString ? { rejectUnauthorized: false } : false
 });
 
 // ==========================================
@@ -87,7 +86,7 @@ app.post('/api/register', async (req, res) => {
         
         if (role === 'seller' || role === 'vendor' || role === 'بائع') {
             finalRole = 'seller';
-            is_active = true;
+            is_active = false; // Pending admin approval
         }
 
         const salt = await bcrypt.genSalt(10);
@@ -100,7 +99,7 @@ app.post('/api/register', async (req, res) => {
         res.status(201).json({ 
             message: "Account created successfully!", 
             user: newUser.rows[0],
-            status: finalRole === 'seller' ? 'active' : 'pending' // Based on user's wording
+            status: finalRole === 'seller' ? 'pending' : 'active'
         });
     } catch (err) {
         console.error(err.message);
@@ -179,12 +178,17 @@ app.post('/api/products', async (req, res) => {
 app.get('/api/orders/user/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
+        const limit = parseInt(req.query.limit) || 10;
+        const offset = parseInt(req.query.offset) || 0;
+
         const orders = await pool.query(
             `SELECT o.*, u.name as driver_name, u.phone as driver_phone
              FROM orders o
              LEFT JOIN users u ON o.driver_id = u.id
-             WHERE o.user_id = $1 ORDER BY o.created_at DESC`,
-            [userId]
+             WHERE o.user_id = $1 
+             ORDER BY o.created_at DESC
+             LIMIT $2 OFFSET $3`,
+            [userId, limit, offset]
         );
         res.json(orders.rows);
     } catch (err) {
@@ -194,33 +198,40 @@ app.get('/api/orders/user/:userId', async (req, res) => {
 
 // --- 5. API إنشاء طلب جديد (Checkout) ---
 app.post('/api/orders', authenticateToken, async (req, res) => {
+    const client = await pool.connect();
     try {
-        const user_id = req.user.id; // بناخد الـ ID من التوكن للأمان
+        const user_id = req.user.id;
         const { store_id, total_price, items, delivery_address, customer_phone } = req.body;
 
         if (!items || items.length === 0) {
             return res.status(400).json({ error: "السلة فاضية يا بطل!" });
         }
 
-        // 1. تسجيل الطلب الأساسي مع العنوان ورقم التليفون
-        const newOrder = await pool.query(
+        await client.query('BEGIN');
+
+        // 1. تسجيل الطلب الأساسي
+        const orderResult = await client.query(
             "INSERT INTO orders (user_id, store_id, total_price, delivery_address, customer_phone) VALUES ($1, $2, $3, $4, $5) RETURNING id",
             [user_id, store_id, total_price, delivery_address, customer_phone]
         );
-        const orderId = newOrder.rows[0].id;
+        const orderId = orderResult.rows[0].id;
 
-        // 2. تسجيل المنتجات اللي جوه الطلب
+        // 2. تسجيل المنتجات
         for (let item of items) {
-            await pool.query(
+            await client.query(
                 "INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES ($1, $2, $3, $4)",
                 [orderId, item.product_id || item.id, item.quantity, item.price]
             );
         }
 
+        await client.query('COMMIT');
         res.status(200).json({ status: "success", message: "تم استقبال الطلب بنجاح وحفظه في قاعدة البيانات", orderId });
     } catch (err) {
+        await client.query('ROLLBACK');
         console.error("خطأ في إنشاء الطلب:", err.message);
         res.status(500).json({ error: "حصلت مشكلة واحنا بنأكد الطلب" });
+    } finally {
+        client.release();
     }
 });
 
@@ -258,13 +269,18 @@ app.put('/api/orders/:id/accept-delivery', async (req, res) => {
 app.get('/api/orders/store/:storeId', async (req, res) => {
     try {
         const { storeId } = req.params;
+        const limit = parseInt(req.query.limit) || 10;
+        const offset = parseInt(req.query.offset) || 0;
+
         const storeOrders = await pool.query(
             `SELECT o.*, u1.name as customer_name, u2.name as driver_name
              FROM orders o
              JOIN users u1 ON o.user_id = u1.id 
              LEFT JOIN users u2 ON o.driver_id = u2.id 
-             WHERE o.store_id = $1 ORDER BY o.created_at DESC`,
-            [storeId]
+             WHERE o.store_id = $1 
+             ORDER BY o.created_at DESC
+             LIMIT $2 OFFSET $3`,
+            [storeId, limit, offset]
         );
         res.json(storeOrders.rows);
     } catch (err) {
@@ -321,23 +337,21 @@ app.delete('/api/admin/users/:id', authenticateToken, authorizeAdmin, async (req
     }
 });
 
-// ==========================================
-// تشغيل السيرفر
-// ==========================================
-const PORT = process.env.PORT || 5000;
 // --- 12. جلب المنتجات للجميع (Public API) ---
-// الزائر والعميل والأدمن كلهم يقدروا يشوفوا المنتجات هنا
 app.get('/api/products', async (req, res) => {
     try {
-        const products = await pool.query("SELECT * FROM products ORDER BY id DESC");
+        const limit = parseInt(req.query.limit) || 20;
+        const offset = parseInt(req.query.offset) || 0;
+
+        const products = await pool.query(
+            "SELECT * FROM products ORDER BY id DESC LIMIT $1 OFFSET $2",
+            [limit, offset]
+        );
         res.json(products.rows);
     } catch (err) {
         console.error("خطأ في جلب المنتجات:", err.message);
         res.status(500).json({ error: "فشل جلب المنتجات من قاعدة البيانات" });
     }
-});
-app.listen(PORT, () => {
-    console.log(`🚀 Server is flying on port ${PORT}`);
 });
 
 // --- 14. إضافة منتج جديد للمطعم (خاص بالبائع) ---
@@ -383,7 +397,7 @@ app.get('/api/products/search', async (req, res) => {
         // بنستخدم ILIKE عشان يدور على الكلمة سواء كابيتال أو سمول، وفي الاسم أو الوصف
         const result = await pool.query(
             "SELECT * FROM products WHERE name ILIKE $1 OR description ILIKE $1 ORDER BY id DESC",
-            [`${searchQuery}%`] // علامات % معناها "أي كلام قبل الكلمة أو بعدها"
+            [`%${searchQuery}%`] // علامات % معناها "أي كلام قبل الكلمة أو بعدها"
         );
 
         res.json(result.rows);
@@ -453,3 +467,16 @@ app.get('/api/products/category/:categoryName', async (req, res) => {
         res.status(500).json({ error: "حصلت مشكلة واحنا بنجيب المنتجات" });
     }
 });
+
+// ==========================================
+// تشغيل السيرفر وتصديره لـ Vercel
+// ==========================================
+const PORT = process.env.PORT || 5000;
+
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`🚀 Server is flying on port ${PORT}`);
+    });
+}
+
+module.exports = app;
