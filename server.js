@@ -36,11 +36,33 @@ app.use(cors({
 app.use(express.json());
 
 // الربط مع قاعدة البيانات (محلي أو سحابي)
-const connectionString = process.env.DATABASE_URL || `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`;
+const poolConfig = process.env.DATABASE_URL 
+    ? { 
+        connectionString: process.env.DATABASE_URL, 
+        ssl: { rejectUnauthorized: false } 
+      }
+    : {
+        user: process.env.DB_USER,
+        host: process.env.DB_HOST,
+        database: process.env.DB_NAME,
+        password: process.env.DB_PASSWORD,
+        port: process.env.DB_PORT,
+        ssl: false
+      };
 
-const pool = new Pool({
-  connectionString: connectionString,
-  ssl: connectionString ? { rejectUnauthorized: false } : false
+const pool = new Pool(poolConfig);
+
+// اختبار الاتصال عند التشغيل
+pool.connect((err, client, release) => {
+    if (err) {
+        return console.error('❌ Error acquiring client:', err.stack);
+    }
+    console.log('✅ Connected to PostgreSQL successfully!');
+    release();
+});
+
+pool.on('error', (err) => {
+    console.error('❌ Unexpected error on idle client:', err);
 });
 
 // ==========================================
