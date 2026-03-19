@@ -19,23 +19,18 @@ const allowedOrigins = [
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl requests)
-        if (!origin) return callback(null, true);
-        
-        // Check if origin is in the allowed list or is a localhost variant
-        const isAllowed = allowedOrigins.includes(origin) || 
-                         origin.startsWith('http://localhost:') || 
-                         origin.startsWith('http://127.0.0.1:');
-        
-        if (!isAllowed) {
-            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-            return callback(new Error(msg), false);
+        // السماح بطلبات الـ Localhost وأي رابط من Vercel أو بدون origin (للتطبيقات)
+        if (!origin || 
+            allowedOrigins.includes(origin) || 
+            origin.includes('localhost') || 
+            origin.includes('127.0.0.1')
+        ) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
         }
-        return callback(null, true);
     },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    preflightContinue: false,
-    optionsSuccessStatus: 204,
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -150,8 +145,8 @@ app.post('/api/register', async (req, res) => {
             status: finalRole === 'seller' ? 'pending' : 'active'
         });
     } catch (err) {
-        console.error(err.message);
-        res.status(500).json({ error: "Email or phone already exists." });
+        console.error("❌ Register Error Details:", err);
+        res.status(500).json({ error: "فشل إنشاء الحساب: " + err.message });
     }
 });
 
@@ -209,8 +204,8 @@ app.post('/api/login', async (req, res) => {
         });
 
     } catch (err) {
-        console.error(err.message);
-        res.status(500).json({ error: "Server error during login" });
+        console.error("❌ Login Error Details:", err);
+        res.status(500).json({ error: "فشل تسجيل الدخول: " + err.message });
     }
 });
 
