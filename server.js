@@ -10,8 +10,23 @@ const crypto = require('crypto');
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const app = express();
+const allowedOrigins = [
+    'https://frontend-delivery-sooty.vercel.app',
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://localhost:5000'
+];
+
 app.use(cors({
-    origin: 'https://frontend-delivery-sooty.vercel.app',
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        if (allowedOrigins.indexOf(origin) === -1) {
+            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+    },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     preflightContinue: false,
     optionsSuccessStatus: 204,
@@ -20,7 +35,8 @@ app.use(cors({
 }));
 app.use(express.json());
 
-const connectionString = process.env.DATABASE_URL;
+// الربط مع قاعدة البيانات (محلي أو سحابي)
+const connectionString = process.env.DATABASE_URL || `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`;
 
 const pool = new Pool({
   connectionString: connectionString,
