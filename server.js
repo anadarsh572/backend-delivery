@@ -4,6 +4,10 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
+const crypto = require('crypto');
+
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const app = express();
 app.use(cors({
@@ -133,16 +137,85 @@ app.post('/api/login', async (req, res) => {
             return res.status(400).json({ error: "الباسورد غلط يا صاحبي" });
         }
 
-        // 4. إنشاء الـ Token (كارت الدخول)
+        // 4. Check if seller has a store (only for sellers)
+        let has_store = false;
+        if (user.role === 'seller') {
+            const storeCheck = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [user.id]);
+            has_store = storeCheck.rows.length > 0;
+        }
+
+        // 5. إنشاء الـ Token (كارت الدخول)
         const token = jwt.sign(
             { id: user.id, role: user.role },
             process.env.JWT_SECRET,
             { expiresIn: '1d' }
         );
 
-        // 5. الرد النهائي
+        // 6. الرد النهائي
         res.json({
             message: "Login successful",
+            token: token,
+            user: {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                role: user.role,
+                has_store: has_store
+            }
+        });
+
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).json({ error: "Server error during login" });
+    }
+});
+
+// --- 3. Google Social Login ---
+app.post('/api/auth/google', async (req, res) => {
+    try {
+        const { credential } = req.body;
+        
+        // 1. Verify Google Token
+        const ticket = await client.verifyIdToken({
+            idToken: credential,
+            audience: process.env.GOOGLE_CLIENT_ID
+        });
+        const payload = ticket.getPayload();
+        const { email, name, picture } = payload;
+
+        // 2. Check if user exists
+        let userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
+        let user;
+
+        if (userResult.rows.length === 0) {
+            // 3. Create new user if not exists
+            const randomPassword = crypto.randomBytes(16).toString('hex');
+            const salt = await bcrypt.genSalt(10);
+            const hashedPassword = await bcrypt.hash(randomPassword, salt);
+            
+            const newUser = await pool.query(
+                "INSERT INTO users (name, email, role, password, is_active) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+                [name, email, 'customer', hashedPassword, true]
+            );
+            user = newUser.rows[0];
+        } else {
+            user = userResult.rows[0];
+        }
+
+        // 4. Check block status
+        if (user.is_active === false) {
+            return res.status(403).json({ error: "حسابك محظور راجع الإدارة" });
+        }
+
+        // 5. Generate JWT
+        const token = jwt.sign(
+            { id: user.id, role: user.role },
+            process.env.JWT_SECRET,
+            { expiresIn: '1d' }
+        );
+
+        res.json({
+            message: "Login successful with Google",
             token: token,
             user: {
                 id: user.id,
@@ -153,8 +226,8 @@ app.post('/api/login', async (req, res) => {
         });
 
     } catch (err) {
-        console.error(err.message);
-        res.status(500).json({ error: "Server error during login" });
+        console.error("Google Auth Error:", err.message);
+        res.status(400).json({ error: "فشل الدخول بحساب جوجل" });
     }
 });
 
@@ -351,6 +424,31 @@ app.get('/api/products', async (req, res) => {
     } catch (err) {
         console.error("خطأ في جلب المنتجات:", err.message);
         res.status(500).json({ error: "فشل جلب المنتجات من قاعدة البيانات" });
+    }
+});
+
+// --- 13. إنشاء متجر جديد (للبائع في بداية التسجيل) ---
+app.post('/api/vendor/create-store', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const { store_name, category } = req.body;
+        const owner_id = req.user.id;
+
+        if (!store_name || !category) {
+            return res.status(400).json({ error: "لازم تدخل اسم المتجر والقسم" });
+        }
+
+        const newStore = await pool.query(
+            "INSERT INTO stores (owner_id, store_name, category) VALUES ($1, $2, $3) RETURNING *",
+            [owner_id, store_name, category]
+        );
+
+        res.status(201).json({
+            message: "تم إنشاء المتجر بنجاح!",
+            store: newStore.rows[0]
+        });
+    } catch (err) {
+        console.error("خطأ في إنشاء المتجر:", err.message);
+        res.status(500).json({ error: "فشل إنشاء المتجر" });
     }
 });
 
