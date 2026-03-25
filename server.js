@@ -126,12 +126,12 @@ app.post('/api/register', async (req, res) => {
         
         // التحقق من نوع الحساب المختار
         let finalRole = 'user';
-        let is_active = true;
+        let is_blocked = false;
         let finalStoreCategory = null;
         
         if (role === 'seller' || role === 'vendor' || role === 'بائع') {
             finalRole = 'seller';
-            is_active = false; // Pending admin approval
+            is_blocked = true; // Pending admin approval
             finalStoreCategory = store_category || 'restaurant'; 
         }
 
@@ -140,8 +140,8 @@ app.post('/api/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(trimmedPassword, salt);
         
         const newUser = await pool.query(
-            "INSERT INTO users (name, email, phone, role, address, password, is_active, store_category) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, name, email, role, is_active, store_category",
-            [name, email, phone, finalRole, address, hashedPassword, is_active, finalStoreCategory]
+            "INSERT INTO users (name, email, phone, role, address, password, is_blocked, store_category) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, name, email, role, is_blocked, store_category",
+            [name, email, phone, finalRole, address, hashedPassword, is_blocked, finalStoreCategory]
         );
         res.status(201).json({ 
             message: "Account created successfully!", 
@@ -169,8 +169,8 @@ app.post('/api/login', async (req, res) => {
         const user = userResult.rows[0];
 
         // 2. الكارت الأحمر (التحقق من الحظر)
-        // لو الأدمن خلى is_active = false، السيرفر هيوقف العملية هنا
-        if (user.is_active === false) {
+        // لو الأدمن خلى is_blocked = true، السيرفر هيوقف العملية هنا
+        if (user.is_blocked === true) {
             return res.status(403).json({ error: "حسابك محظور يا صاحبي.. راجع الإدارة!" });
         }
 
@@ -241,8 +241,8 @@ app.post('/api/auth/google', async (req, res) => {
             const hashedPassword = await bcrypt.hash(randomPassword, salt);
             
             const newUser = await pool.query(
-                "INSERT INTO users (name, email, role, password, is_active) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-                [name, email, 'customer', hashedPassword, true]
+                "INSERT INTO users (name, email, role, password, is_blocked) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+                [name, email, 'customer', hashedPassword, false]
             );
             user = newUser.rows[0];
         } else {
@@ -250,7 +250,7 @@ app.post('/api/auth/google', async (req, res) => {
         }
 
         // 4. Check block status
-        if (user.is_active === false) {
+        if (user.is_blocked === true) {
             return res.status(403).json({ error: "حسابك محظور راجع الإدارة" });
         }
 
@@ -286,7 +286,7 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
         
         // Fetch user data
         const userResult = await pool.query(
-            "SELECT name, email, phone, role, is_active FROM users WHERE id = $1",
+            "SELECT name, email, phone, role, is_blocked FROM users WHERE id = $1",
             [userId]
         );
 
@@ -497,7 +497,7 @@ app.get('/api/orders/store/:storeId', async (req, res) => {
 app.get('/api/admin/users', authenticateToken, authorizeAdmin, async (req, res) => {
     try {
         // يجلب كل المستخدمين مع بياناتهم (الاسم، الإيميل، الحالة، الدور، وتصنيف المتجر store_category)
-        const result = await pool.query("SELECT id, name, email, phone, role, is_active, store_category, created_at FROM users ORDER BY created_at DESC");
+        const result = await pool.query("SELECT id, name, email, phone, role, is_blocked, store_category, created_at FROM users ORDER BY created_at DESC");
         res.json(result.rows);
     } catch (err) {
         console.error("Admin Fetch Users Error:", err.message);
@@ -560,7 +560,7 @@ app.patch('/api/admin/users/:id/role', authenticateToken, authorizeAdmin, async 
         const { role } = req.body; 
 
         const updatedUser = await pool.query(
-            "UPDATE users SET role = $1 WHERE id = $2 RETURNING id, name, email, role, is_active",
+            "UPDATE users SET role = $1 WHERE id = $2 RETURNING id, name, email, role, is_blocked",
             [role, id]
         );
 
@@ -576,17 +576,17 @@ app.patch('/api/admin/users/:id/role', authenticateToken, authorizeAdmin, async 
 app.patch('/api/admin/users/:id/status', authenticateToken, authorizeAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        // نأخذ القيمة سواء كانت is_active أو عكس is_blocked
-        const is_active = req.body.is_active !== undefined ? req.body.is_active : !req.body.is_blocked;
+        // نأخذ القيمة سواء كانت is_blocked أو عكس is_active
+        const is_blocked = req.body.is_blocked !== undefined ? req.body.is_blocked : !req.body.is_active;
 
         const updatedUser = await pool.query(
-            "UPDATE users SET is_active = $1 WHERE id = $2 RETURNING id, name, email, role, is_active",
-            [is_active, id]
+            "UPDATE users SET is_blocked = $1 WHERE id = $2 RETURNING id, name, email, role, is_blocked",
+            [is_blocked, id]
         );
 
         if (updatedUser.rows.length === 0) return res.status(404).json({ error: "المستخدم غير موجود" });
 
-        if (is_active === true) {
+        if (is_blocked === false) {
             console.log('User unblocked:', id);
         } else {
             console.log('User blocked:', id);
@@ -605,7 +605,7 @@ app.patch('/api/admin/users/:id/make-admin', authenticateToken, authorizeAdmin, 
         const { id } = req.params;
 
         const updatedUser = await pool.query(
-            "UPDATE users SET role = 'admin' WHERE id = $1 RETURNING id, name, email, role, is_active",
+            "UPDATE users SET role = 'admin' WHERE id = $1 RETURNING id, name, email, role, is_blocked",
             [id]
         );
 

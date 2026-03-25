@@ -19,8 +19,8 @@ async function verify() {
         const vendorMail = `vendor_${Date.now()}@example.com`;
         const vPhone = `123${Date.now()}`;
         const vRes = await pool.query(
-            "INSERT INTO users (name, email, phone, role, password, is_active) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
-            ['Test Vendor Order', vendorMail, vPhone, 'seller', 'hash', true]
+            "INSERT INTO users (name, email, phone, role, password, is_blocked) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+            ['Test Vendor Order', vendorMail, vPhone, 'seller', 'hash', false]
         );
         const vendorId = vRes.rows[0].id;
 
@@ -28,8 +28,8 @@ async function verify() {
         const custMail = `cust_${Date.now()}@example.com`;
         const cPhone = `321${Date.now()}`;
         const cRes = await pool.query(
-            "INSERT INTO users (name, email, phone, role, password, is_active) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
-            ['Test Cust Order', custMail, cPhone, 'customer', 'hash', true]
+            "INSERT INTO users (name, email, phone, role, password, is_blocked) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+            ['Test Cust Order', custMail, cPhone, 'customer', 'hash', false]
         );
         const custId = cRes.rows[0].id;
 
