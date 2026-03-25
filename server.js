@@ -104,13 +104,15 @@ const authorizeSeller = (req, res, next) => {
 // API لجلب طلبات للتاجر المسجل دخوله
 app.get('/api/vendor/orders', authenticateToken, authorizeSeller, async (req, res) => {
     try {
+        // Fetching orders using vendor_id which represents the seller's ID in the orders table
         const result = await pool.query(
             "SELECT * FROM orders WHERE vendor_id = $1 ORDER BY created_at DESC",
             [req.user.id]
         );
         res.json(result.rows);
     } catch (err) {
-        res.status(500).json({ error: "فشل جلب طلبات التاجر" });
+        console.error("❌ Vendor Orders Fetch Error:", err);
+        res.status(500).json({ error: "فشل جلب طلبات التاجر", details: err.message });
     }
 });
 
@@ -398,16 +400,23 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: "السلة فاضية يا بطل!" });
         }
 
+        // IMPORTANT: The DB schema uses 'vendor_id' column for the store/seller relation
+        const targetVendorId = store_id || vendor_id;
+
         const orderResult = await pool.query(
             "INSERT INTO orders (user_id, vendor_id, total_price, address, phone, customer_name, items) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-            [user_id, finalVendorId, total_price, finalAddress, finalPhone, customer_name, JSON.stringify(items)]
+            [user_id, targetVendorId, total_price, finalAddress, finalPhone, customer_name, JSON.stringify(items)]
         );
         const orderId = orderResult.rows[0].id;
 
         res.status(200).json({ status: "success", message: "تم استقبال الطلب بنجاح وحفظه في قاعدة البيانات", orderId });
     } catch (err) {
-        console.error("خطأ في إنشاء الطلب:", err.message);
-        res.status(500).json({ error: "حصلت مشكلة واحنا بنأكد الطلب" });
+        console.error("❌ خطأ في إنشاء الطلب:", err.message);
+        res.status(500).json({ 
+            error: "حصلت مشكلة واحنا بنأكد الطلب", 
+            details: err.message,
+            hint: "تأكد أن أسماء الأعمدة في قاعدة البيانات مطابقة للأكواد (vendor_id, address, phone, items)"
+        });
     }
 });
 
