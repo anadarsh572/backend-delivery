@@ -24,6 +24,10 @@ async function checkSchema() {
         const storesInfo = await pool.query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'stores'");
         console.table(storesInfo.rows);
 
+        console.log('--- Orders Table ---');
+        const ordersInfo = await pool.query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'orders'");
+        console.table(ordersInfo.rows);
+
     } catch (err) {
         console.error(err);
     } finally {

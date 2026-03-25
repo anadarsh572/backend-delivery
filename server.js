@@ -396,25 +396,30 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
         const finalAddress = address || delivery_address;
         const finalPhone = phone || customer_phone;
 
+        if (!finalVendorId) {
+            return res.status(400).json({ error: "معرف المتجر (vendor_id/store_id) مطلوب" });
+        }
+
         if (!items || items.length === 0) {
             return res.status(400).json({ error: "السلة فاضية يا بطل!" });
         }
 
-        // IMPORTANT: The DB schema uses 'vendor_id' column for the store/seller relation
-        const targetVendorId = store_id || vendor_id;
+        // items should be sent as direct object for jsonb columns in pg
+        const finalItems = typeof items === 'string' ? items : JSON.stringify(items);
 
         const orderResult = await pool.query(
             "INSERT INTO orders (user_id, vendor_id, total_price, address, phone, customer_name, items) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-            [user_id, targetVendorId, total_price, finalAddress, finalPhone, customer_name, JSON.stringify(items)]
+            [user_id, finalVendorId, total_price, finalAddress, finalPhone, customer_name, finalItems]
         );
         const orderId = orderResult.rows[0].id;
 
         res.status(200).json({ status: "success", message: "تم استقبال الطلب بنجاح وحفظه في قاعدة البيانات", orderId });
     } catch (err) {
-        console.error("❌ خطأ في إنشاء الطلب:", err.message);
+        console.error("❌ خطأ في إنشاء الطلب:", err);
         res.status(500).json({ 
             error: "حصلت مشكلة واحنا بنأكد الطلب", 
             details: err.message,
+            stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
             hint: "تأكد أن أسماء الأعمدة في قاعدة البيانات مطابقة للأكواد (vendor_id, address, phone, items)"
         });
     }
