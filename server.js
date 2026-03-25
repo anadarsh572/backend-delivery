@@ -551,6 +551,27 @@ app.delete('/api/admin/users/:id', authenticateToken, authorizeAdmin, async (req
     }
 });
 
+// --- 11b. فك حظر مستخدم (للأدمن فقط) ---
+app.patch('/api/admin/users/:id/unblock', authenticateToken, authorizeAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const updatedUser = await pool.query(
+            "UPDATE users SET is_active = true WHERE id = $1 RETURNING id, name, email, role, is_active",
+            [id]
+        );
+
+        if (updatedUser.rows.length === 0) {
+            return res.status(404).json({ error: "المستخدم غير موجود" });
+        }
+
+        res.json({ message: "تم فك الحظر عن المستخدم بنجاح!", user: updatedUser.rows[0] });
+    } catch (err) {
+        console.error("Admin Unblock Error:", err);
+        res.status(500).json({ error: "فشل فك الحظر" });
+    }
+});
+
 // --- 12. جلب المنتجات للجميع (Public API) ---
 app.get('/api/products', async (req, res) => {
     try {
