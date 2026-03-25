@@ -482,7 +482,8 @@ app.get('/api/orders/store/:storeId', async (req, res) => {
 // --- 9. جلب كافة المستخدمين (للأدمن فقط) ---
 app.get('/api/admin/users', authenticateToken, authorizeAdmin, async (req, res) => {
     try {
-        const result = await pool.query("SELECT id, name, email, phone, role, is_active, created_at FROM users ORDER BY created_at DESC");
+        // يجلب كل المستخدمين مع بياناتهم (الاسم، الإيميل، الحالة، الدور، وتصنيف المتجر store_category)
+        const result = await pool.query("SELECT id, name, email, phone, role, is_active, store_category, created_at FROM users ORDER BY created_at DESC");
         res.json(result.rows);
     } catch (err) {
         console.error("Admin Fetch Users Error:", err.message);
@@ -522,22 +523,60 @@ app.get('/api/admin/stats', authenticateToken, authorizeAdmin, async (req, res) 
     }
 });
 
-// --- 10. التحكم الكامل في المستخدمين (للأدمن فقط) ---
-app.put('/api/admin/users/:id', authenticateToken, authorizeAdmin, async (req, res) => {
+// --- 10a. تغيير دور المستخدم (للأدمن فقط) ---
+app.patch('/api/admin/users/:id/role', authenticateToken, authorizeAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        const { role, is_active } = req.body;
+        const { role } = req.body; 
 
         const updatedUser = await pool.query(
-            "UPDATE users SET role = $1, is_active = $2 WHERE id = $3 RETURNING id, name, email, role, is_active",
-            [role, is_active, id]
+            "UPDATE users SET role = $1 WHERE id = $2 RETURNING id, name, email, role, is_active",
+            [role, id]
         );
 
         if (updatedUser.rows.length === 0) return res.status(404).json({ error: "المستخدم غير موجود" });
 
-        res.json({ message: "تم التحديث بنجاح!", user: updatedUser.rows[0] });
+        res.json({ message: "تم تحديث دور المستخدم بنجاح!", user: updatedUser.rows[0] });
     } catch (err) {
-        res.status(500).json({ error: "فشل التحديث" });
+        res.status(500).json({ error: "فشل تحديث الدور" });
+    }
+});
+
+// --- 10b. تحديث حالة المستخدم (حظر/فك حظر) ---
+app.patch('/api/admin/users/:id/status', authenticateToken, authorizeAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        // Accept boolean directly or infer from is_blocked
+        const is_active = req.body.is_active !== undefined ? req.body.is_active : !req.body.is_blocked;
+
+        const updatedUser = await pool.query(
+            "UPDATE users SET is_active = $1 WHERE id = $2 RETURNING id, name, email, role, is_active",
+            [is_active, id]
+        );
+
+        if (updatedUser.rows.length === 0) return res.status(404).json({ error: "المستخدم غير موجود" });
+
+        res.json({ message: "تم تغيير حالة الحظر بنجاح!", user: updatedUser.rows[0] });
+    } catch (err) {
+        res.status(500).json({ error: "فشل تحديث الحالة" });
+    }
+});
+
+// --- 10c. ترقية مستخدم ليكون أدمن من قبل أدمن آخر ---
+app.patch('/api/admin/users/:id/make-admin', authenticateToken, authorizeAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const updatedUser = await pool.query(
+            "UPDATE users SET role = 'admin' WHERE id = $1 RETURNING id, name, email, role, is_active",
+            [id]
+        );
+
+        if (updatedUser.rows.length === 0) return res.status(404).json({ error: "المستخدم غير موجود" });
+
+        res.json({ message: "تم ترقية المستخدم إلى أدمن بنجاح!", user: updatedUser.rows[0] });
+    } catch (err) {
+        res.status(500).json({ error: "فشل ترقية المستخدم" });
     }
 });
 
@@ -548,27 +587,6 @@ app.delete('/api/admin/users/:id', authenticateToken, authorizeAdmin, async (req
         res.json({ message: "تم حذف المستخدم نهائياً" });
     } catch (err) {
         res.status(500).json({ error: "فشل الحذف" });
-    }
-});
-
-// --- 11b. فك حظر مستخدم (للأدمن فقط) ---
-app.patch('/api/admin/users/:id/unblock', authenticateToken, authorizeAdmin, async (req, res) => {
-    try {
-        const { id } = req.params;
-
-        const updatedUser = await pool.query(
-            "UPDATE users SET is_active = true WHERE id = $1 RETURNING id, name, email, role, is_active",
-            [id]
-        );
-
-        if (updatedUser.rows.length === 0) {
-            return res.status(404).json({ error: "المستخدم غير موجود" });
-        }
-
-        res.json({ message: "تم فك الحظر عن المستخدم بنجاح!", user: updatedUser.rows[0] });
-    } catch (err) {
-        console.error("Admin Unblock Error:", err);
-        res.status(500).json({ error: "فشل فك الحظر" });
     }
 });
 
