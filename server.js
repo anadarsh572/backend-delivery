@@ -537,6 +537,22 @@ app.get('/api/admin/stats', authenticateToken, authorizeAdmin, async (req, res) 
     }
 });
 
+// --- 9c. جلب كافة الطلبات (للأدمن فقط) ---
+app.get('/api/admin/orders', authenticateToken, authorizeAdmin, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT o.*, u.name as customer_name 
+             FROM orders o 
+             JOIN users u ON o.user_id = u.id 
+             ORDER BY o.created_at DESC`
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Admin Fetch Orders Error:", err.message);
+        res.status(500).json({ error: "فشل جلب كافة الطلبات" });
+    }
+});
+
 // --- 10a. تغيير دور المستخدم (للأدمن فقط) ---
 app.patch('/api/admin/users/:id/role', authenticateToken, authorizeAdmin, async (req, res) => {
     try {
@@ -560,7 +576,7 @@ app.patch('/api/admin/users/:id/role', authenticateToken, authorizeAdmin, async 
 app.patch('/api/admin/users/:id/status', authenticateToken, authorizeAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        // Accept boolean directly or infer from is_blocked
+        // نأخذ القيمة سواء كانت is_active أو عكس is_blocked
         const is_active = req.body.is_active !== undefined ? req.body.is_active : !req.body.is_blocked;
 
         const updatedUser = await pool.query(
@@ -570,8 +586,15 @@ app.patch('/api/admin/users/:id/status', authenticateToken, authorizeAdmin, asyn
 
         if (updatedUser.rows.length === 0) return res.status(404).json({ error: "المستخدم غير موجود" });
 
+        if (is_active === true) {
+            console.log('User unblocked:', id);
+        } else {
+            console.log('User blocked:', id);
+        }
+
         res.json({ message: "تم تغيير حالة الحظر بنجاح!", user: updatedUser.rows[0] });
     } catch (err) {
+        console.error("Admin Status Update Error:", err);
         res.status(500).json({ error: "فشل تحديث الحالة" });
     }
 });
