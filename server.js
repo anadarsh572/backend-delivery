@@ -101,17 +101,16 @@ const authorizeSeller = (req, res, next) => {
     }
 };
 
-// API لجلب طلبات مطعم معين فقط (للبائع)
-app.get('/api/vendor/my-orders', authenticateToken, authorizeSeller, async (req, res) => {
+// API لجلب طلبات للتاجر المسجل دخوله
+app.get('/api/vendor/orders', authenticateToken, authorizeSeller, async (req, res) => {
     try {
-        // req.user.id هو الـ ID بتاع البائع اللي جاي من التوكن
         const result = await pool.query(
-            "SELECT * FROM orders WHERE store_id = (SELECT id FROM stores WHERE owner_id = $1)",
+            "SELECT * FROM orders WHERE vendor_id = $1 ORDER BY created_at DESC",
             [req.user.id]
         );
         res.json(result.rows);
     } catch (err) {
-        res.status(500).json({ error: "فشل جلب طلباتك" });
+        res.status(500).json({ error: "فشل جلب طلبات التاجر" });
     }
 });
 
@@ -121,23 +120,25 @@ app.get('/api/vendor/my-orders', authenticateToken, authorizeSeller, async (req,
 
 app.post('/api/register', async (req, res) => {
     try {
-        const { name, email, phone, role, address, password } = req.body;
+        const { name, email, phone, role, address, password, store_category } = req.body;
         
         // التحقق من نوع الحساب المختار
         let finalRole = 'user';
         let is_active = true;
+        let finalStoreCategory = null;
         
         if (role === 'seller' || role === 'vendor' || role === 'بائع') {
             finalRole = 'seller';
             is_active = false; // Pending admin approval
+            finalStoreCategory = store_category || 'restaurant'; 
         }
 
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(password, salt);
         
         const newUser = await pool.query(
-            "INSERT INTO users (name, email, phone, role, address, password, is_active) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, name, email, role, is_active",
-            [name, email, phone, finalRole, address, hashedPassword, is_active]
+            "INSERT INTO users (name, email, phone, role, address, password, is_active, store_category) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, name, email, role, is_active, store_category",
+            [name, email, phone, finalRole, address, hashedPassword, is_active, finalStoreCategory]
         );
         res.status(201).json({ 
             message: "Account created successfully!", 
@@ -270,16 +271,85 @@ app.post('/api/auth/google', async (req, res) => {
     }
 });
 
+// --- 4. User Profile ---
+app.get('/api/user/profile', authenticateToken, async (req, res) => {
+    console.log('Request received for profile');
+    try {
+        const userId = req.user.id;
+        
+        // Fetch user data
+        const userResult = await pool.query(
+            "SELECT name, email, phone, role, is_active FROM users WHERE id = $1",
+            [userId]
+        );
+
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: "المستخدم غير موجود" });
+        }
+
+        const userData = userResult.rows[0];
+
+        // Fetch last 5 orders
+        const ordersResult = await pool.query(
+            "SELECT id, created_at, total_price, status FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5",
+            [userId]
+        );
+
+        res.json({
+            user: userData,
+            recent_orders: ordersResult.rows
+        });
+    } catch (err) {
+        console.error("❌ Get Profile Error:", err);
+        res.status(500).json({ error: "فشل جلب بيانات البروفايل: " + err.message });
+    }
+});
+
+app.patch('/api/user/profile', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { name, phone } = req.body;
+
+        // Validation
+        if (!name || typeof name !== 'string' || name.trim() === '') {
+            return res.status(400).json({ error: "الاسم مطلوب ولا يمكن أن يكون فارغاً" });
+        }
+
+        if (!phone || typeof phone !== 'string' || phone.trim() === '') {
+            return res.status(400).json({ error: "رقم الهاتف مطلوب ولا يمكن أن يكون فارغاً" });
+        }
+
+        // Update user
+        const updateResult = await pool.query(
+            "UPDATE users SET name = $1, phone = $2 WHERE id = $3 RETURNING name, email, phone, role",
+            [name.trim(), phone.trim(), userId]
+        );
+
+        if (updateResult.rows.length === 0) {
+            return res.status(404).json({ error: "المستخدم غير موجود" });
+        }
+
+        res.json({
+            message: "تم تحديث البيانات بنجاح",
+            user: updateResult.rows[0]
+        });
+
+    } catch (err) {
+        console.error("❌ Update Profile Error:", err);
+        res.status(500).json({ error: "فشل تحديث بيانات البروفايل: " + err.message });
+    }
+});
+
 // ==========================================
 // APIs المنتجات والطلبات (Products & Orders)
 // ==========================================
 
 app.post('/api/products', async (req, res) => {
     try {
-        const { store_id, name, description, price, image_url } = req.body;
+        const { store_id, name, description, price, image_url, category } = req.body;
         const newProduct = await pool.query(
-            "INSERT INTO products (store_id, name, description, price, image_url) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-            [store_id, name, description, price, image_url]
+            "INSERT INTO products (store_id, name, description, price, image_url, category) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+            [store_id, name, description, price, image_url, category]
         );
         res.status(201).json(newProduct.rows[0]);
     } catch (err) {
@@ -310,55 +380,55 @@ app.get('/api/orders/user/:userId', async (req, res) => {
 
 // --- 5. API إنشاء طلب جديد (Checkout) ---
 app.post('/api/orders', authenticateToken, async (req, res) => {
-    const client = await pool.connect();
     try {
         const user_id = req.user.id;
-        const { store_id, total_price, items, delivery_address, customer_phone } = req.body;
+        // Accept old and new payload names for backward compatibility initially
+        const { store_id, vendor_id, total_price, items, delivery_address, address, customer_phone, phone, customer_name } = req.body;
+
+        const finalVendorId = vendor_id || store_id;
+        const finalAddress = address || delivery_address;
+        const finalPhone = phone || customer_phone;
 
         if (!items || items.length === 0) {
             return res.status(400).json({ error: "السلة فاضية يا بطل!" });
         }
 
-        await client.query('BEGIN');
-
-        // 1. تسجيل الطلب الأساسي
-        const orderResult = await client.query(
-            "INSERT INTO orders (user_id, store_id, total_price, delivery_address, customer_phone) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-            [user_id, store_id, total_price, delivery_address, customer_phone]
+        const orderResult = await pool.query(
+            "INSERT INTO orders (user_id, vendor_id, total_price, address, phone, customer_name, items) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+            [user_id, finalVendorId, total_price, finalAddress, finalPhone, customer_name, JSON.stringify(items)]
         );
         const orderId = orderResult.rows[0].id;
 
-        // 2. تسجيل المنتجات
-        for (let item of items) {
-            await client.query(
-                "INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES ($1, $2, $3, $4)",
-                [orderId, item.product_id || item.id, item.quantity, item.price]
-            );
-        }
-
-        await client.query('COMMIT');
         res.status(200).json({ status: "success", message: "تم استقبال الطلب بنجاح وحفظه في قاعدة البيانات", orderId });
     } catch (err) {
-        await client.query('ROLLBACK');
         console.error("خطأ في إنشاء الطلب:", err.message);
         res.status(500).json({ error: "حصلت مشكلة واحنا بنأكد الطلب" });
-    } finally {
-        client.release();
     }
 });
 
-// تحديث الحالة (للمطعم والمندوب)
-app.put('/api/orders/:id/status', async (req, res) => {
+// مسار تحديث الحالة 
+app.patch('/api/orders/:id/status', authenticateToken, authorizeSeller, async (req, res) => {
     try {
         const { id } = req.params;
         const { status } = req.body;
+        
+        const validStatuses = ['pending', 'accepted', 'rejected', 'Delivered', 'OnTheWay', 'Preparing'];
+        if (!validStatuses.includes(status)) {
+            return res.status(400).json({ error: "حالة الطلب غير صالحة" });
+        }
+
         const updatedOrder = await pool.query(
             "UPDATE orders SET status = $1 WHERE id = $2 RETURNING *",
             [status, id]
         );
+        
+        if (updatedOrder.rows.length === 0) {
+            return res.status(404).json({ error: "الطلب غير موجود" });
+        }
         res.json(updatedOrder.rows[0]);
     } catch (err) {
-        res.status(500).json({ error: "Update failed" });
+        console.error("Update Status Error:", err);
+        res.status(500).json({ error: "فشل تحديث حالة الطلب" });
     }
 });
 
@@ -403,6 +473,33 @@ app.get('/api/orders/store/:storeId', async (req, res) => {
 // ==========================================
 // 🔒 APIs المشرف السرية (Admin Only)
 // ==========================================
+
+// --- 9. جلب كافة المستخدمين (للأدمن فقط) ---
+app.get('/api/admin/users', authenticateToken, authorizeAdmin, async (req, res) => {
+    try {
+        const result = await pool.query("SELECT id, name, email, phone, role, is_active, created_at FROM users ORDER BY created_at DESC");
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Admin Fetch Users Error:", err.message);
+        res.status(500).json({ error: "فشل جلب المستخدمين" });
+    }
+});
+
+// --- 9b. جلب كافة البائعين/المتاجر (للأدمن فقط) ---
+app.get('/api/admin/vendors', authenticateToken, authorizeAdmin, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT u.id, u.name, u.email, u.phone, s.name as store_name, s.category, s.subscription_status 
+             FROM users u 
+             JOIN stores s ON u.id = s.owner_id 
+             WHERE u.role = 'seller' OR u.role = 'vendor'`
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Admin Fetch Vendors Error:", err.message);
+        res.status(500).json({ error: "فشل جلب البائعين" });
+    }
+});
 
 app.get('/api/admin/stats', authenticateToken, authorizeAdmin, async (req, res) => {
     try {
@@ -452,13 +549,28 @@ app.delete('/api/admin/users/:id', authenticateToken, authorizeAdmin, async (req
 // --- 12. جلب المنتجات للجميع (Public API) ---
 app.get('/api/products', async (req, res) => {
     try {
+        const { category } = req.query;
         const limit = parseInt(req.query.limit) || 20;
         const offset = parseInt(req.query.offset) || 0;
 
-        const products = await pool.query(
-            "SELECT * FROM products ORDER BY id DESC LIMIT $1 OFFSET $2",
-            [limit, offset]
-        );
+        let query;
+        let params;
+
+        if (category) {
+            query = `
+                SELECT p.* 
+                FROM products p
+                WHERE p.category = $1
+                ORDER BY p.id DESC 
+                LIMIT $2 OFFSET $3
+            `;
+            params = [category, limit, offset];
+        } else {
+            query = "SELECT * FROM products ORDER BY id DESC LIMIT $1 OFFSET $2";
+            params = [limit, offset];
+        }
+
+        const products = await pool.query(query, params);
         res.json(products.rows);
     } catch (err) {
         console.error("خطأ في جلب المنتجات:", err.message);
@@ -469,16 +581,15 @@ app.get('/api/products', async (req, res) => {
 // --- 13. إنشاء متجر جديد (للبائع في بداية التسجيل) ---
 app.post('/api/vendor/create-store', authenticateToken, authorizeSeller, async (req, res) => {
     try {
-        const { store_name, category } = req.body;
-        const owner_id = req.user.id;
+        const { store_name } = req.body;
 
-        if (!store_name || !category) {
-            return res.status(400).json({ error: "لازم تدخل اسم المتجر والقسم" });
+        if (!store_name) {
+            return res.status(400).json({ error: "لازم تدخل اسم المتجر" });
         }
 
         const newStore = await pool.query(
-            "INSERT INTO stores (owner_id, store_name, category) VALUES ($1, $2, $3) RETURNING *",
-            [owner_id, store_name, category]
+            "INSERT INTO stores (owner_id, name) VALUES ($1, $2) RETURNING *",
+            [req.user.id, store_name]
         );
 
         res.status(201).json({
@@ -494,7 +605,7 @@ app.post('/api/vendor/create-store', authenticateToken, authorizeSeller, async (
 // --- 14. إضافة منتج جديد للمطعم (خاص بالبائع) ---
 app.post('/api/vendor/products', authenticateToken, authorizeSeller, async (req, res) => {
     try {
-        const { name, description, price, image_url } = req.body;
+        const { name, description, price, image_url, category } = req.body;
         const ownerId = req.user.id; // هويّة الشخص اللي باعت الطلب
 
         // أولاً: بنعرف البائع ده يملك أنهي مطعم
@@ -508,8 +619,8 @@ app.post('/api/vendor/products', authenticateToken, authorizeSeller, async (req,
 
         // ثانياً: بنضيف المنتج وبنربطه بالـ storeId أوتوماتيك
         const newProduct = await pool.query(
-            "INSERT INTO products (store_id, name, description, price, image_url) VALUES ($1, $2, $3, $4, $5) RETURNING *",
-            [storeId, name, description, price, image_url]
+            "INSERT INTO products (store_id, name, description, price, image_url, category) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+            [storeId, name, description, price, image_url, category]
         );
 
         res.status(201).json({
@@ -589,19 +700,22 @@ app.get('/api/products/category/:categoryName', async (req, res) => {
     try {
         const { categoryName } = req.params;
 
-        // هنا السيرفر بيجيب المنتجات اللي تابعة لمتاجر من القسم المطلوب بس
         const result = await pool.query(
-            `SELECT p.*, s.store_name, s.category 
+            `SELECT p.*, s.name as store_name 
             FROM products p
             JOIN stores s ON p.store_id = s.id
-            WHERE s.category = $1
+            WHERE p.category = $1
             ORDER BY p.id DESC`
             , [categoryName]);
 
         res.json(result.rows);
     } catch (err) {
-        console.error("خطأ في جلب منتجات القسم:", err.message);
-        res.status(500).json({ error: "حصلت مشكلة واحنا بنجيب المنتجات" });
+        console.error("❌ Category Fetch Error:", err);
+        res.status(500).json({ 
+            error: "فشل في جلب المنتجات", 
+            details: err.message,
+            hint: "تأكد أن أسماء الأعمدة في جدول الـ stores صحيحة (name, category)"
+        });
     }
 });
 

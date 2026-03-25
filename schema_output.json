@@ -1,0 +1,120 @@
+{
+  "products": [
+    {
+      "column_name": "id",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "store_id",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "name",
+      "data_type": "character varying"
+    },
+    {
+      "column_name": "description",
+      "data_type": "text"
+    },
+    {
+      "column_name": "price",
+      "data_type": "numeric"
+    },
+    {
+      "column_name": "image_url",
+      "data_type": "character varying"
+    },
+    {
+      "column_name": "is_available",
+      "data_type": "boolean"
+    },
+    {
+      "column_name": "created_at",
+      "data_type": "timestamp without time zone"
+    }
+  ],
+  "users": [
+    {
+      "column_name": "id",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "name",
+      "data_type": "character varying"
+    },
+    {
+      "column_name": "email",
+      "data_type": "character varying"
+    },
+    {
+      "column_name": "phone",
+      "data_type": "character varying"
+    },
+    {
+      "column_name": "role",
+      "data_type": "character varying"
+    },
+    {
+      "column_name": "address",
+      "data_type": "text"
+    },
+    {
+      "column_name": "password",
+      "data_type": "character varying"
+    },
+    {
+      "column_name": "wallet_balance",
+      "data_type": "numeric"
+    },
+    {
+      "column_name": "created_at",
+      "data_type": "timestamp without time zone"
+    },
+    {
+      "column_name": "is_active",
+      "data_type": "boolean"
+    }
+  ],
+  "stores": [
+    {
+      "column_name": "id",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "name",
+      "data_type": "character varying"
+    },
+    {
+      "column_name": "owner_id",
+      "data_type": "integer"
+    },
+    {
+      "column_name": "location",
+      "data_type": "text"
+    },
+    {
+      "column_name": "image",
+      "data_type": "character varying"
+    },
+    {
+      "column_name": "status",
+      "data_type": "character varying"
+    },
+    {
+      "column_name": "average_rating",
+      "data_type": "numeric"
+    },
+    {
+      "column_name": "created_at",
+      "data_type": "timestamp without time zone"
+    },
+    {
+      "column_name": "subscription_status",
+      "data_type": "character varying"
+    },
+    {
+      "column_name": "subscription_expiry",
+      "data_type": "date"
+    }
+  ]
+}
