@@ -133,8 +133,9 @@ app.post('/api/register', async (req, res) => {
             finalStoreCategory = store_category || 'restaurant'; 
         }
 
+        const trimmedPassword = password ? password.trim() : '';
         const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
+        const hashedPassword = await bcrypt.hash(trimmedPassword, salt);
         
         const newUser = await pool.query(
             "INSERT INTO users (name, email, phone, role, address, password, is_active, store_category) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, name, email, role, is_active, store_category",
@@ -172,7 +173,11 @@ app.post('/api/login', async (req, res) => {
         }
 
         // 3. مقارنة الباسورد
-        const validPassword = await bcrypt.compare(password, user.password);
+        const trimmedPassword = password ? password.trim() : '';
+        const validPassword = await bcrypt.compare(trimmedPassword, user.password);
+        
+        console.log(`[Login Verify] Email: ${email} | Result (true/false):`, validPassword);
+
         if (!validPassword) {
             return res.status(400).json({ error: "الباسورد غلط يا صاحبي" });
         }
