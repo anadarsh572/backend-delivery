@@ -91,25 +91,24 @@ const updateDatabaseSchema = async () => {
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS status CHARACTER VARYING(50) DEFAULT 'active';`,
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS subscription_status CHARACTER VARYING(50) DEFAULT 'free';`,
 
-            // تحديث جدول الطلبات (Orders)
-            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS vendor_id INTEGER;`,
-            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS user_id INTEGER;`,
-            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS total_price NUMERIC;`,
-            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS status CHARACTER VARYING(50) DEFAULT 'Pending';`,
-            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS address TEXT;`,
-            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS phone CHARACTER VARYING(20);`,
-            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS items JSONB;`,
-            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name CHARACTER VARYING(255);`,
-            
             // محاولة التحويل من التسميات القديمة إذا وجدت
             `DO $$ 
             BEGIN 
+                -- تحديث جدول الطلبات
                 IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='store_id') THEN 
                     UPDATE orders SET vendor_id = store_id WHERE vendor_id IS NULL;
                 END IF; 
                 IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='delivery_address') THEN 
                     UPDATE orders SET address = delivery_address WHERE address IS NULL;
                 END IF;
+
+                -- تحديث جدول المتاجر
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='store_name') THEN 
+                    -- إذا كان فيه عمود اسمه name وعمود اسمه store_name، ننقل البيانات
+                    UPDATE stores SET name = store_name WHERE name IS NULL;
+                    -- نجعل العمود القديم يقبل NULL لكي لا يفشل الإدخال الجديد
+                    ALTER TABLE stores ALTER COLUMN store_name DROP NOT NULL;
+                END IF; 
             END $$;`,
 
             // تحديث جدول المنتجات
@@ -800,15 +799,16 @@ app.get('/api/products', async (req, res) => {
 // --- 13. إنشاء متجر جديد (للبائع في بداية التسجيل) ---
 app.post('/api/vendor/create-store', authenticateToken, authorizeSeller, async (req, res) => {
     try {
-        const { store_name } = req.body;
+        const { store_name, name } = req.body;
+        const finalName = store_name || name;
 
-        if (!store_name) {
+        if (!finalName) {
             return res.status(400).json({ error: "لازم تدخل اسم المتجر" });
         }
 
         const newStore = await pool.query(
             "INSERT INTO stores (owner_id, name) VALUES ($1, $2) RETURNING *",
-            [req.user.id, store_name]
+            [req.user.id, finalName]
         );
 
         res.status(201).json({
