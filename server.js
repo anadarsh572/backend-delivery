@@ -23,7 +23,8 @@ app.use(cors({
         if (!origin || 
             allowedOrigins.includes(origin) || 
             origin.includes('localhost') || 
-            origin.includes('127.0.0.1')
+            origin.includes('127.0.0.1') ||
+            origin.endsWith('.vercel.app')
         ) {
             callback(null, true);
         } else {
@@ -35,6 +36,12 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
+
+// 📝 Logger بسيط عشان نعرف إيه اللي بيحصل في السيرفر
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
 
 // الربط مع قاعدة البيانات (محلي أو سحابي)
 const poolConfig = process.env.DATABASE_URL 
@@ -94,7 +101,7 @@ const authorizeAdmin = (req, res, next) => {
 };
 // بوديجارد البائع
 const authorizeSeller = (req, res, next) => {
-    if (req.user && (req.user.role === 'seller' || req.user.role === 'admin')) {
+    if (req.user && (req.user.role === 'seller' || req.user.role === 'vendor' || req.user.role === 'admin')) {
         next();
     } else {
         res.status(403).json({ error: "لازم تكون صاحب مطعم عشان تدخل هنا" });
