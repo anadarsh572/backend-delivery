@@ -67,10 +67,29 @@ const updateDatabaseSchema = async () => {
     try {
         console.log('🔄 Checking and updating database schema...');
         const queries = [
-            // التأكد من وجود الجداول الأساسية
+            // الجداول الأساسية
+            `CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
             `CREATE TABLE IF NOT EXISTS orders (id SERIAL PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
             `CREATE TABLE IF NOT EXISTS products (id SERIAL PRIMARY KEY);`,
             `CREATE TABLE IF NOT EXISTS stores (id SERIAL PRIMARY KEY);`,
+
+            // تحديث جدول المستخدمين (Users)
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS email CHARACTER VARYING(255) UNIQUE;`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone CHARACTER VARYING(20);`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS role CHARACTER VARYING(50) DEFAULT 'user';`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS address TEXT;`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS password CHARACTER VARYING(255);`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT false;`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS store_category CHARACTER VARYING(100);`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC DEFAULT 0;`,
+
+            // تحديث جدول المتاجر (Stores)
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS owner_id INTEGER;`,
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS category CHARACTER VARYING(100);`,
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS status CHARACTER VARYING(50) DEFAULT 'active';`,
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS subscription_status CHARACTER VARYING(50) DEFAULT 'free';`,
 
             // تحديث جدول الطلبات (Orders)
             `ALTER TABLE orders ADD COLUMN IF NOT EXISTS vendor_id INTEGER;`,
@@ -97,6 +116,9 @@ const updateDatabaseSchema = async () => {
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS store_id INTEGER;`,
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS price NUMERIC;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS description TEXT;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url CHARACTER VARYING(500);`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS category CHARACTER VARYING(100);`,
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT true;`
         ];
 
