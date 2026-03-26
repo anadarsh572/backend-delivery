@@ -104,15 +104,64 @@ const authorizeSeller = (req, res, next) => {
 // API لجلب طلبات للتاجر المسجل دخوله
 app.get('/api/vendor/orders', authenticateToken, authorizeSeller, async (req, res) => {
     try {
-        // Fetching orders using vendor_id which represents the seller's ID in the orders table
+        const vendorId = req.user.id;
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        
+        if (storeResult.rows.length === 0) {
+            return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
+        }
+        
+        const storeId = storeResult.rows[0].id;
+
         const result = await pool.query(
             "SELECT * FROM orders WHERE vendor_id = $1 ORDER BY created_at DESC",
-            [req.user.id]
+            [storeId]
         );
         res.json(result.rows);
     } catch (err) {
         console.error("❌ Vendor Orders Fetch Error:", err);
         res.status(500).json({ error: "فشل جلب طلبات التاجر", details: err.message });
+    }
+});
+
+// API لجلب إحصائيات التاجر (عدد الطلبات، الأرباح، المعلقة)
+app.get('/api/vendor/stats', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        // Get store_id first
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
+        const storeId = storeResult.rows[0].id;
+
+        const statsQuery = `
+            SELECT 
+                COUNT(*) as total_orders,
+                SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending_orders,
+                SUM(CASE WHEN status = 'Delivered' THEN total_price ELSE 0 END) as total_revenue
+            FROM orders 
+            WHERE vendor_id = $1
+        `;
+        const result = await pool.query(statsQuery, [storeId]);
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error("❌ Vendor Stats Error:", err);
+        res.status(500).json({ error: "فشل جلب الإحصائيات" });
+    }
+});
+
+// API لجلب منتجات التاجر فقط
+app.get('/api/vendor/products', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "المتجر غير موجود" });
+        const storeId = storeResult.rows[0].id;
+
+        const result = await pool.query("SELECT * FROM products WHERE store_id = $1 ORDER BY id DESC", [storeId]);
+        res.json(result.rows);
+    } catch (err) {
+        console.error("❌ Vendor Fetch Products Error:", err);
+        res.status(500).json({ error: "فشل جلب المنتجات الخاصة بك" });
     }
 });
 
@@ -261,6 +310,12 @@ app.post('/api/auth/google', async (req, res) => {
             { expiresIn: '1d' }
         );
 
+        let has_store = false;
+        if (user.role === 'seller') {
+            const storeCheck = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [user.id]);
+            has_store = storeCheck.rows.length > 0;
+        }
+
         res.json({
             message: "Login successful with Google",
             token: token,
@@ -268,7 +323,8 @@ app.post('/api/auth/google', async (req, res) => {
                 id: user.id,
                 name: user.name,
                 email: user.email,
-                role: user.role
+                role: user.role,
+                has_store: has_store
             }
         });
 
@@ -478,7 +534,7 @@ app.get('/api/orders/store/:storeId', async (req, res) => {
              FROM orders o
              JOIN users u1 ON o.user_id = u1.id 
              LEFT JOIN users u2 ON o.driver_id = u2.id 
-             WHERE o.store_id = $1 
+             WHERE o.vendor_id = $1 
              ORDER BY o.created_at DESC
              LIMIT $2 OFFSET $3`,
             [storeId, limit, offset]
