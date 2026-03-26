@@ -550,7 +550,8 @@ app.get('/api/orders/store/:storeId', async (req, res) => {
         );
         res.json(storeOrders.rows);
     } catch (err) {
-        res.status(500).json({ error: "Error fetching store orders" });
+        console.error("❌ Error fetching store orders:", err);
+        res.status(500).json({ error: "Error fetching store orders", details: err.message });
     }
 });
 
