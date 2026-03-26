@@ -104,13 +104,15 @@ const updateDatabaseSchema = async () => {
 
                 -- تحديث جدول المتاجر
                 IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='store_name') THEN 
-                    -- إذا كان فيه عمود اسمه name وعمود اسمه store_name، ننقل البيانات
                     UPDATE stores SET name = store_name WHERE name IS NULL;
-                    -- نجعل العمود القديم يقبل NULL لكي لا يفشل الإدخال الجديد
-                    -- ويفضل حذفه بالتدريج، لكن مؤقتاً نبدأ بجعله يقبل NULL
                     EXECUTE 'ALTER TABLE stores ALTER COLUMN store_name DROP NOT NULL';
                 END IF; 
+
+                -- تسجيل الأعمدة للتأكد (Debugging)
+                RAISE NOTICE 'Columns in stores table detected:';
             END $$;`,
+            // عرض الأعمدة في اللوج للتشخيص لضمان سلامة الـ Schema
+            `SELECT column_name FROM information_schema.columns WHERE table_name = 'stores';`,
 
             // تحديث جدول المنتجات
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS store_id INTEGER;`,
@@ -817,8 +819,15 @@ app.post('/api/vendor/create-store', authenticateToken, authorizeSeller, async (
             store: newStore.rows[0]
         });
     } catch (err) {
-        console.error("خطأ في إنشاء المتجر:", err.message);
-        res.status(500).json({ error: "فشل إنشاء المتجر" });
+        console.error("❌ خطأ مفصل في إنشاء المتجر:", err);
+        res.status(500).json({ 
+            error: "فشل إنشاء المتجر", 
+            message: err.message,
+            detail: err.detail,
+            hint: err.hint,
+            column: err.column,
+            constraint: err.constraint
+        });
     }
 });
 
