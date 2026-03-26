@@ -107,14 +107,10 @@ const updateDatabaseSchema = async () => {
                     UPDATE stores SET name = store_name WHERE name IS NULL;
                     EXECUTE 'ALTER TABLE stores ALTER COLUMN store_name DROP NOT NULL';
                 END IF; 
-
-                -- إزالة أي قيود NOT NULL قد تعيق إنشاء المتجر
-                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='category') THEN 
-                    EXECUTE 'ALTER TABLE stores ALTER COLUMN category DROP NOT NULL';
-                END IF;
             END $$;`,
             `ALTER TABLE stores ALTER COLUMN name DROP NOT NULL;`,
             `ALTER TABLE stores ALTER COLUMN owner_id DROP NOT NULL;`,
+            `ALTER TABLE stores ALTER COLUMN category DROP NOT NULL;`,
 
             // تحديث جدول المنتجات
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS store_id INTEGER;`,
@@ -127,9 +123,13 @@ const updateDatabaseSchema = async () => {
         ];
 
         for (let q of queries) {
-            await pool.query(q);
+            try {
+                await pool.query(q);
+            } catch (err) {
+                console.warn(`⚠️ Query failed but continuing: ${q.substring(0, 50)}... Error: ${err.message}`);
+            }
         }
-        console.log('✅ Database schema is up to date.');
+        console.log('✅ Database schema update cycle completed.');
     } catch (err) {
         console.error('❌ Database migration error:', err.message);
     }
