@@ -12,6 +12,7 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const app = express();
 const allowedOrigins = [
     'https://frontend-delivery-sooty.vercel.app',
+    'https://backend-delivery-ten.vercel.app',
     'http://localhost:3000',
     'http://localhost:5173',
     'http://localhost:5000'
@@ -19,21 +20,22 @@ const allowedOrigins = [
 
 app.use(cors({
     origin: function (origin, callback) {
-        // السماح بطلبات الـ Localhost وأي رابط من Vercel أو بدون origin (للتطبيقات)
+        // السماح بطلبات الـ Localhost وأي رابط ينتهي بـ vercel.app أو بدون origin (للتطبيقات)
         if (!origin || 
             allowedOrigins.includes(origin) || 
             origin.includes('localhost') || 
             origin.includes('127.0.0.1') ||
-            origin.endsWith('.vercel.app')
+            origin.includes('vercel.app')
         ) {
             callback(null, true);
         } else {
+            console.log('Blocked by CORS:', origin);
             callback(new Error('Not allowed by CORS'));
         }
     },
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     credentials: true,
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
 app.use(express.json());
 
