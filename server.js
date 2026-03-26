@@ -840,6 +840,8 @@ app.post('/api/vendor/create-store', authenticateToken, authorizeSeller, async (
 // --- Debug Endpoint ---
 app.get('/api/debug/schema', async (req, res) => {
     try {
+        console.log("⚡ Manual schema update triggered via debug endpoint");
+        await updateDatabaseSchema();
         const result = await pool.query(`
             SELECT table_name, column_name, data_type, is_nullable 
             FROM information_schema.columns 
