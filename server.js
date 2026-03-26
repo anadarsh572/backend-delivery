@@ -107,7 +107,8 @@ const updateDatabaseSchema = async () => {
                     -- إذا كان فيه عمود اسمه name وعمود اسمه store_name، ننقل البيانات
                     UPDATE stores SET name = store_name WHERE name IS NULL;
                     -- نجعل العمود القديم يقبل NULL لكي لا يفشل الإدخال الجديد
-                    ALTER TABLE stores ALTER COLUMN store_name DROP NOT NULL;
+                    -- ويفضل حذفه بالتدريج، لكن مؤقتاً نبدأ بجعله يقبل NULL
+                    EXECUTE 'ALTER TABLE stores ALTER COLUMN store_name DROP NOT NULL';
                 END IF; 
             END $$;`,
 
