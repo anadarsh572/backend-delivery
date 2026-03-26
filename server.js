@@ -63,9 +63,12 @@ const poolConfig = process.env.DATABASE_URL
 const pool = new Pool(poolConfig);
 
 // 🛠️ وظيفة تحديث قاعدة البيانات تلقائياً
+let migrationLogs = [];
+
 const updateDatabaseSchema = async () => {
+    migrationLogs = [];
     try {
-        console.log('🔄 Checking and updating database schema...');
+        migrationLogs.push('🔄 Starting database schema update...');
         const queries = [
             // الجداول الأساسية
             `CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
@@ -125,12 +128,15 @@ const updateDatabaseSchema = async () => {
         for (let q of queries) {
             try {
                 await pool.query(q);
+                migrationLogs.push(`✅ Success: ${q.substring(0, 50)}...`);
             } catch (err) {
-                console.warn(`⚠️ Query failed but continuing: ${q.substring(0, 50)}... Error: ${err.message}`);
+                migrationLogs.push(`❌ Failed: ${q.substring(0, 50)}... Error: ${err.message}`);
+                console.warn(`Query failed: ${q}`, err.message);
             }
         }
-        console.log('✅ Database schema update cycle completed.');
+        migrationLogs.push('✅ Schema update cycle completed.');
     } catch (err) {
+        migrationLogs.push(`🔴 CRITICAL Migration Error: ${err.message}`);
         console.error('❌ Database migration error:', err.message);
     }
 };
@@ -848,9 +854,12 @@ app.get('/api/debug/schema', async (req, res) => {
             WHERE table_schema = 'public' 
             ORDER BY table_name, column_name;
         `);
-        res.json(result.rows);
+        res.json({
+            schema: result.rows,
+            migrationLogs: migrationLogs
+        });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: err.message, logs: migrationLogs });
     }
 });
 
