@@ -67,22 +67,36 @@ const updateDatabaseSchema = async () => {
     try {
         console.log('🔄 Checking and updating database schema...');
         const queries = [
-            // تحديث جدول الطلبات (Orders) - تغيير مسميات الأعمدة القديمة للجديدة
+            // التأكد من وجود الجداول الأساسية
+            `CREATE TABLE IF NOT EXISTS orders (id SERIAL PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+            `CREATE TABLE IF NOT EXISTS products (id SERIAL PRIMARY KEY);`,
+            `CREATE TABLE IF NOT EXISTS stores (id SERIAL PRIMARY KEY);`,
+
+            // تحديث جدول الطلبات (Orders)
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS vendor_id INTEGER;`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS user_id INTEGER;`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS total_price NUMERIC;`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS status CHARACTER VARYING(50) DEFAULT 'Pending';`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS address TEXT;`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS phone CHARACTER VARYING(20);`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS items JSONB;`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name CHARACTER VARYING(255);`,
+            
+            // محاولة التحويل من التسميات القديمة إذا وجدت
             `DO $$ 
             BEGIN 
                 IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='store_id') THEN 
-                    ALTER TABLE orders RENAME COLUMN store_id TO vendor_id; 
+                    UPDATE orders SET vendor_id = store_id WHERE vendor_id IS NULL;
                 END IF; 
                 IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='delivery_address') THEN 
-                    ALTER TABLE orders RENAME COLUMN delivery_address TO address; 
-                END IF;
-                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='customer_phone') THEN 
-                    ALTER TABLE orders RENAME COLUMN customer_phone TO phone; 
+                    UPDATE orders SET address = delivery_address WHERE address IS NULL;
                 END IF;
             END $$;`,
-            // التأكد من وجود الأعمدة الجديدة
-            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS items JSONB;`,
-            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name CHARACTER VARYING(255);`,
+
+            // تحديث جدول المنتجات
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS store_id INTEGER;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS price NUMERIC;`,
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT true;`
         ];
 
