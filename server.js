@@ -62,13 +62,49 @@ const poolConfig = process.env.DATABASE_URL
 
 const pool = new Pool(poolConfig);
 
-// اختبار الاتصال عند التشغيل
-pool.connect((err, client, release) => {
+// 🛠️ وظيفة تحديث قاعدة البيانات تلقائياً
+const updateDatabaseSchema = async () => {
+    try {
+        console.log('🔄 Checking and updating database schema...');
+        const queries = [
+            // تحديث جدول الطلبات (Orders) - تغيير مسميات الأعمدة القديمة للجديدة
+            `DO $$ 
+            BEGIN 
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='store_id') THEN 
+                    ALTER TABLE orders RENAME COLUMN store_id TO vendor_id; 
+                END IF; 
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='delivery_address') THEN 
+                    ALTER TABLE orders RENAME COLUMN delivery_address TO address; 
+                END IF;
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='customer_phone') THEN 
+                    ALTER TABLE orders RENAME COLUMN customer_phone TO phone; 
+                END IF;
+            END $$;`,
+            // التأكد من وجود الأعمدة الجديدة
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS items JSONB;`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name CHARACTER VARYING(255);`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT true;`
+        ];
+
+        for (let q of queries) {
+            await pool.query(q);
+        }
+        console.log('✅ Database schema is up to date.');
+    } catch (err) {
+        console.error('❌ Database migration error:', err.message);
+    }
+};
+
+// اختبار الاتصال عند التشغيل وتشغيل التحديثات
+pool.connect(async (err, client, release) => {
     if (err) {
         return console.error('❌ Error acquiring client:', err.stack);
     }
     console.log('✅ Connected to PostgreSQL successfully!');
     release();
+    
+    // تشغيل التحديث التلقائي
+    await updateDatabaseSchema();
 });
 
 pool.on('error', (err) => {
