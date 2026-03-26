@@ -108,11 +108,13 @@ const updateDatabaseSchema = async () => {
                     EXECUTE 'ALTER TABLE stores ALTER COLUMN store_name DROP NOT NULL';
                 END IF; 
 
-                -- تسجيل الأعمدة للتأكد (Debugging)
-                RAISE NOTICE 'Columns in stores table detected:';
+                -- إزالة أي قيود NOT NULL قد تعيق إنشاء المتجر
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='category') THEN 
+                    EXECUTE 'ALTER TABLE stores ALTER COLUMN category DROP NOT NULL';
+                END IF;
             END $$;`,
-            // عرض الأعمدة في اللوج للتشخيص لضمان سلامة الـ Schema
-            `SELECT column_name FROM information_schema.columns WHERE table_name = 'stores';`,
+            `ALTER TABLE stores ALTER COLUMN name DROP NOT NULL;`,
+            `ALTER TABLE stores ALTER COLUMN owner_id DROP NOT NULL;`,
 
             // تحديث جدول المنتجات
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS store_id INTEGER;`,
