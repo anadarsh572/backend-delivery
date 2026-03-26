@@ -809,6 +809,10 @@ app.post('/api/vendor/create-store', authenticateToken, authorizeSeller, async (
             return res.status(400).json({ error: "لازم تدخل اسم المتجر" });
         }
 
+        // تشخيص إضافي قبل الإدخال (Debug)
+        const columns = await pool.query("SELECT column_name, is_nullable FROM information_schema.columns WHERE table_name = 'stores'");
+        console.log("🛠️ Current columns in stores table:", columns.rows);
+
         const newStore = await pool.query(
             "INSERT INTO stores (owner_id, name) VALUES ($1, $2) RETURNING *",
             [req.user.id, finalName]
@@ -828,6 +832,21 @@ app.post('/api/vendor/create-store', authenticateToken, authorizeSeller, async (
             column: err.column,
             constraint: err.constraint
         });
+    }
+});
+
+// --- Debug Endpoint ---
+app.get('/api/debug/schema', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT table_name, column_name, data_type, is_nullable 
+            FROM information_schema.columns 
+            WHERE table_schema = 'public' 
+            ORDER BY table_name, column_name;
+        `);
+        res.json(result.rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
 });
 
