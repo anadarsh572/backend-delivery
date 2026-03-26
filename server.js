@@ -70,47 +70,20 @@ const updateDatabaseSchema = async () => {
     try {
         migrationLogs.push('🔄 Starting database schema update...');
         const queries = [
-            `CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
-            `CREATE TABLE IF NOT EXISTS orders (id SERIAL PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
-            `CREATE TABLE IF NOT EXISTS products (id SERIAL PRIMARY KEY);`,
             `CREATE TABLE IF NOT EXISTS stores (id SERIAL PRIMARY KEY);`,
-            `ALTER TABLE users ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
-            `ALTER TABLE users ADD COLUMN IF NOT EXISTS email CHARACTER VARYING(255) UNIQUE;`,
-            `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone CHARACTER VARYING(20);`,
-            `ALTER TABLE users ADD COLUMN IF NOT EXISTS role CHARACTER VARYING(50) DEFAULT 'user';`,
-            `ALTER TABLE users ADD COLUMN IF NOT EXISTS address TEXT;`,
-            `ALTER TABLE users ADD COLUMN IF NOT EXISTS password CHARACTER VARYING(255);`,
-            `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT false;`,
-            `ALTER TABLE users ADD COLUMN IF NOT EXISTS store_category CHARACTER VARYING(100);`,
-            `ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC DEFAULT 0;`,
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS owner_id INTEGER;`,
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS category CHARACTER VARYING(100);`,
-            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS status CHARACTER VARYING(50) DEFAULT 'active';`,
-            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS subscription_status CHARACTER VARYING(50) DEFAULT 'free';`,
+            `ALTER TABLE stores ALTER COLUMN name DROP NOT NULL;`,
+            `ALTER TABLE stores ALTER COLUMN owner_id DROP NOT NULL;`,
+            `ALTER TABLE stores ALTER COLUMN category DROP NOT NULL;`,
             `DO $$ 
             BEGIN 
-                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='store_id') THEN 
-                    UPDATE orders SET vendor_id = store_id WHERE vendor_id IS NULL;
-                END IF; 
-                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='delivery_address') THEN 
-                    UPDATE orders SET address = delivery_address WHERE address IS NULL;
-                END IF;
                 IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='store_name') THEN 
                     UPDATE stores SET name = store_name WHERE name IS NULL;
                     EXECUTE 'ALTER TABLE stores ALTER COLUMN store_name DROP NOT NULL';
                 END IF; 
-            END $$;`,
-            `ALTER TABLE stores ALTER COLUMN name DROP NOT NULL;`,
-            `ALTER TABLE stores ALTER COLUMN owner_id DROP NOT NULL;`,
-            `ALTER TABLE stores ALTER COLUMN category DROP NOT NULL;`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS store_id INTEGER;`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS price NUMERIC;`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS description TEXT;`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url CHARACTER VARYING(500);`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS category CHARACTER VARYING(100);`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS is_available BOOLEAN DEFAULT true;`
+            END $$;`
         ];
 
         for (let q of queries) {
