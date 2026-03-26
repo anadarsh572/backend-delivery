@@ -70,13 +70,10 @@ const updateDatabaseSchema = async () => {
     try {
         migrationLogs.push('🔄 Starting database schema update...');
         const queries = [
-            // الجداول الأساسية
             `CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
             `CREATE TABLE IF NOT EXISTS orders (id SERIAL PRIMARY KEY, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
             `CREATE TABLE IF NOT EXISTS products (id SERIAL PRIMARY KEY);`,
             `CREATE TABLE IF NOT EXISTS stores (id SERIAL PRIMARY KEY);`,
-
-            // تحديث جدول المستخدمين (Users)
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS email CHARACTER VARYING(255) UNIQUE;`,
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone CHARACTER VARYING(20);`,
@@ -86,26 +83,19 @@ const updateDatabaseSchema = async () => {
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT false;`,
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS store_category CHARACTER VARYING(100);`,
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC DEFAULT 0;`,
-
-            // تحديث جدول المتاجر (Stores)
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS owner_id INTEGER;`,
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS category CHARACTER VARYING(100);`,
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS status CHARACTER VARYING(50) DEFAULT 'active';`,
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS subscription_status CHARACTER VARYING(50) DEFAULT 'free';`,
-
-            // محاولة التحويل من التسميات القديمة إذا وجدت
             `DO $$ 
             BEGIN 
-                -- تحديث جدول الطلبات
                 IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='store_id') THEN 
                     UPDATE orders SET vendor_id = store_id WHERE vendor_id IS NULL;
                 END IF; 
                 IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='delivery_address') THEN 
                     UPDATE orders SET address = delivery_address WHERE address IS NULL;
                 END IF;
-
-                -- تحديث جدول المتاجر
                 IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='store_name') THEN 
                     UPDATE stores SET name = store_name WHERE name IS NULL;
                     EXECUTE 'ALTER TABLE stores ALTER COLUMN store_name DROP NOT NULL';
@@ -114,8 +104,6 @@ const updateDatabaseSchema = async () => {
             `ALTER TABLE stores ALTER COLUMN name DROP NOT NULL;`,
             `ALTER TABLE stores ALTER COLUMN owner_id DROP NOT NULL;`,
             `ALTER TABLE stores ALTER COLUMN category DROP NOT NULL;`,
-
-            // تحديث جدول المنتجات
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS store_id INTEGER;`,
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS price NUMERIC;`,
@@ -128,9 +116,9 @@ const updateDatabaseSchema = async () => {
         for (let q of queries) {
             try {
                 await pool.query(q);
-                migrationLogs.push(`✅ Success: ${q.substring(0, 50)}...`);
+                migrationLogs.push(`✅ Success: ${q.substring(0, 40)}...`);
             } catch (err) {
-                migrationLogs.push(`❌ Failed: ${q.substring(0, 50)}... Error: ${err.message}`);
+                migrationLogs.push(`❌ Failed Query: ${err.message}`);
                 console.warn(`Query failed: ${q}`, err.message);
             }
         }
@@ -991,5 +979,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = app;   
- 
+module.exports = app; 
