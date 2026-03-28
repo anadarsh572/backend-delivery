@@ -93,6 +93,31 @@ const updateDatabaseSchema = async () => {
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='payment_method') THEN 
                     ALTER TABLE orders ADD COLUMN payment_method CHARACTER VARYING(50) DEFAULT 'Cash on Delivery';
                 END IF;
+
+                -- Alignment for new strict mapping
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='customer_phone') THEN 
+                    ALTER TABLE orders ADD COLUMN customer_phone CHARACTER VARYING(20);
+                    -- Migrate existing data if phone exists
+                    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='phone') THEN
+                        UPDATE orders SET customer_phone = phone WHERE customer_phone IS NULL;
+                    END IF;
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='customer_address') THEN 
+                    ALTER TABLE orders ADD COLUMN customer_address TEXT;
+                    -- Migrate existing data if address exists
+                    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='address') THEN
+                        UPDATE orders SET customer_address = address WHERE customer_address IS NULL;
+                    END IF;
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='items_price') THEN 
+                    ALTER TABLE orders ADD COLUMN items_price NUMERIC(10,2);
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='delivery_fee') THEN 
+                    ALTER TABLE orders ADD COLUMN delivery_fee NUMERIC(10,2) DEFAULT 15;
+                END IF;
             END $$;`
         ];
 
@@ -573,20 +598,18 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
             items_price,
             delivery_fee,
             items, 
-            delivery_address, 
-            address, 
+            customer_address,
             customer_phone, 
-            phone, 
             customer_name,
             payment_method 
         } = req.body;
 
-        // التأكد من استلام الـ store_id (استخدام vendor_id كبديل للتوافقية)
+        // Alignment for mapping
         const finalStoreId = store_id || vendor_id;
-        const finalAddress = address || delivery_address;
-        const finalPhone = phone || customer_phone;
-        const finalPaymentMethod = payment_method || 'Cash on Delivery';
-        const finalDeliveryFee = parseFloat(delivery_fee) || 0;
+        const finalAddress = customer_address;
+        const finalPhone = customer_phone;
+        const finalPaymentMethod = payment_method || 'cash';
+        const finalDeliveryFee = parseFloat(delivery_fee) || 15;
 
         if (!finalStoreId) {
             return res.status(400).json({ error: "معرف المتجر (store_id) مطلوب" });
@@ -596,7 +619,7 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: "السلة فاضية يا بطل!" });
         }
 
-        // حساب items_price لو مش موجود (جمع سعر كل قطعة * الكمية)
+        // حساب items_price لو مش موجود
         let calculatedItemsPrice = 0;
         const parsedItems = typeof items === 'string' ? JSON.parse(items) : items;
         
@@ -617,7 +640,7 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
         const finalItemsJson = typeof items === 'string' ? items : JSON.stringify(items);
 
         const orderResult = await pool.query(
-            "INSERT INTO orders (user_id, store_id, total_price, items_price, delivery_fee, address, phone, customer_name, items, payment_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
+            "INSERT INTO orders (user_id, store_id, total_price, items_price, delivery_fee, customer_address, customer_phone, customer_name, items, payment_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
             [user_id, finalStoreId, finalTotalPrice, calculatedItemsPrice, finalDeliveryFee, finalAddress, finalPhone, customer_name, finalItemsJson, finalPaymentMethod]
         );
         const orderId = orderResult.rows[0].id;
