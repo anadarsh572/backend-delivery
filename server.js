@@ -332,7 +332,12 @@ app.post('/api/login', async (req, res) => {
             }
         }
 
-        // 5. إنشاء الـ Token (كارت الدخول)
+        // 5. إنشاء الـ Token (كارت الدخول) مع التأكد من وجود الـ Secret
+        if (!process.env.JWT_SECRET) {
+            console.error("❌ JWT_SECRET is missing from environment variables!");
+            return res.status(500).json({ error: "خطأ في إعدادات السيرفر (JWT)" });
+        }
+
         const token = jwt.sign(
             { id: user.id, role: user.role },
             process.env.JWT_SECRET,
@@ -1081,6 +1086,18 @@ app.get('/api/products/category/:categoryName', async (req, res) => {
     }
 });
 
+// --- 19. Global Error Handler (معالجة الأخطاء الشاملة) ---
+// هذا مهم جداً لضمان عدم تعطل السيرفر وإرجاع استجابة JSON دائماً
+app.use((err, req, res, next) => {
+    console.error("💥 Unhandled Error:", err.stack);
+    
+    // إرجاع استجابة JSON مع كود 500 لو محصلش غير كدة
+    res.status(err.status || 500).json({
+        error: "حدث خطأ داخلي في السيرفر",
+        details: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+});
+
 // ==========================================
 // تشغيل السيرفر وتصديره لـ Vercel
 // ==========================================
@@ -1091,6 +1108,5 @@ if (require.main === module) {
         console.log(`🚀 Server is flying on port ${PORT}`);
     });
 }
-
 
 module.exports = app;
