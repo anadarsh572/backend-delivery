@@ -11,7 +11,6 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const app = express();
 const allowedOrigins = [
-    'https://frontend-delivery-sooty.vercel.app',
     'https://backend-delivery-ten.vercel.app',
     'http://localhost:3000',
     'http://localhost:5173',
@@ -20,12 +19,11 @@ const allowedOrigins = [
 
 app.use(cors({
     origin: function (origin, callback) {
-        // السماح بطلبات الـ Localhost وأي رابط ينتهي بـ vercel.app أو بدون origin (للتطبيقات)
+        // السماح بطلبات الـ Localhost وأي رابط من قائمة الـ Whitelist أو بدون origin
         if (!origin || 
             allowedOrigins.includes(origin) || 
             origin.includes('localhost') || 
-            origin.includes('127.0.0.1') ||
-            origin.includes('vercel.app')
+            origin.includes('127.0.0.1')
         ) {
             callback(null, true);
         } else {
@@ -83,6 +81,18 @@ const updateDatabaseSchema = async () => {
                     UPDATE stores SET name = store_name WHERE name IS NULL;
                     EXECUTE 'ALTER TABLE stores ALTER COLUMN store_name DROP NOT NULL';
                 END IF; 
+            END $$;`,
+            `DO $$ 
+            BEGIN 
+                -- Rename vendor_id back to store_id in orders table for consistency
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='vendor_id') THEN 
+                    ALTER TABLE orders RENAME COLUMN vendor_id TO store_id;
+                END IF;
+
+                -- Add payment_method column with default value
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='payment_method') THEN 
+                    ALTER TABLE orders ADD COLUMN payment_method CHARACTER VARYING(50) DEFAULT 'Cash on Delivery';
+                END IF;
             END $$;`
         ];
 
@@ -156,8 +166,9 @@ const authorizeSeller = (req, res, next) => {
 // API لجلب طلبات للتاجر المسجل دخوله
 app.get('/api/vendor/orders', authenticateToken, authorizeSeller, async (req, res) => {
     try {
-        const vendorId = req.user.id;
-        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        const userId = req.user.id;
+        // أولاً: بنجيب معرف المتجر (store_id) الخاص بصاحب الحساب
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [userId]);
         
         if (storeResult.rows.length === 0) {
             return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
@@ -165,8 +176,9 @@ app.get('/api/vendor/orders', authenticateToken, authorizeSeller, async (req, re
         
         const storeId = storeResult.rows[0].id;
 
+        // ثانياً: بنفلتر الطلبات بناءً على store_id المتجر
         const result = await pool.query(
-            "SELECT * FROM orders WHERE vendor_id = $1 ORDER BY created_at DESC",
+            "SELECT * FROM orders WHERE store_id = $1 ORDER BY created_at DESC",
             [storeId]
         );
         res.json(result.rows);
@@ -191,7 +203,7 @@ app.get('/api/vendor/stats', authenticateToken, authorizeSeller, async (req, res
                 SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending_orders,
                 SUM(CASE WHEN status = 'Delivered' THEN total_price ELSE 0 END) as total_revenue
             FROM orders 
-            WHERE vendor_id = $1
+            WHERE store_id = $1
         `;
         const result = await pool.query(statsQuery, [storeId]);
         res.json(result.rows[0]);
@@ -285,11 +297,14 @@ app.post('/api/login', async (req, res) => {
             return res.status(400).json({ error: "الباسورد غلط يا صاحبي" });
         }
 
-        // 4. Check if seller has a store (only for sellers)
         let has_store = false;
-        if (user.role === 'seller') {
+        let store_id = null;
+        if (user.role === 'seller' || user.role === 'vendor') {
             const storeCheck = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [user.id]);
-            has_store = storeCheck.rows.length > 0;
+            if (storeCheck.rows.length > 0) {
+                has_store = true;
+                store_id = storeCheck.rows[0].id;
+            }
         }
 
         // 5. إنشاء الـ Token (كارت الدخول)
@@ -308,7 +323,8 @@ app.post('/api/login', async (req, res) => {
                 name: user.name,
                 email: user.email,
                 role: user.role,
-                has_store: has_store
+                has_store: has_store,
+                store_id: store_id
             }
         });
 
@@ -363,9 +379,13 @@ app.post('/api/auth/google', async (req, res) => {
         );
 
         let has_store = false;
-        if (user.role === 'seller') {
+        let store_id = null;
+        if (user.role === 'seller' || user.role === 'vendor') {
             const storeCheck = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [user.id]);
-            has_store = storeCheck.rows.length > 0;
+            if (storeCheck.rows.length > 0) {
+                has_store = true;
+                store_id = storeCheck.rows[0].id;
+            }
         }
 
         res.json({
@@ -376,7 +396,8 @@ app.post('/api/auth/google', async (req, res) => {
                 name: user.name,
                 email: user.email,
                 role: user.role,
-                has_store: has_store
+                has_store: has_store,
+                store_id: store_id
             }
         });
 
@@ -386,15 +407,48 @@ app.post('/api/auth/google', async (req, res) => {
     }
 });
 
+// --- 3b. Verify Token & Get Current User ---
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const userResult = await pool.query("SELECT id, name, email, role FROM users WHERE id = $1", [userId]);
+        
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: "User not found" });
+        }
+
+        const user = userResult.rows[0];
+        
+        let has_store = false;
+        let store_id = null;
+        if (user.role === 'seller' || user.role === 'vendor') {
+            const storeCheck = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [user.id]);
+            if (storeCheck.rows.length > 0) {
+                has_store = true;
+                store_id = storeCheck.rows[0].id;
+            }
+        }
+
+        res.json({
+            user: {
+                ...user,
+                has_store,
+                store_id
+            }
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // --- 4. User Profile ---
 app.get('/api/user/profile', authenticateToken, async (req, res) => {
-    console.log('Request received for profile');
     try {
         const userId = req.user.id;
         
         // Fetch user data
         const userResult = await pool.query(
-            "SELECT name, email, phone, role, is_blocked FROM users WHERE id = $1",
+            "SELECT id, name, email, phone, role, is_blocked FROM users WHERE id = $1",
             [userId]
         );
 
@@ -404,6 +458,17 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
 
         const userData = userResult.rows[0];
 
+        // Check store status
+        let has_store = false;
+        let store_id = null;
+        if (userData.role === 'seller' || userData.role === 'vendor') {
+            const storeCheck = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [userId]);
+            if (storeCheck.rows.length > 0) {
+                has_store = true;
+                store_id = storeCheck.rows[0].id;
+            }
+        }
+
         // Fetch last 5 orders
         const ordersResult = await pool.query(
             "SELECT id, created_at, total_price, status FROM orders WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5",
@@ -411,7 +476,11 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
         );
 
         res.json({
-            user: userData,
+            user: {
+                ...userData,
+                has_store,
+                store_id
+            },
             recent_orders: ordersResult.rows
         });
     } catch (err) {
@@ -497,27 +566,59 @@ app.get('/api/orders/user/:userId', async (req, res) => {
 app.post('/api/orders', authenticateToken, async (req, res) => {
     try {
         const user_id = req.user.id;
-        // Accept old and new payload names for backward compatibility initially
-        const { store_id, vendor_id, total_price, items, delivery_address, address, customer_phone, phone, customer_name } = req.body;
+        const { 
+            store_id, 
+            vendor_id, 
+            total_price, 
+            items_price,
+            delivery_fee,
+            items, 
+            delivery_address, 
+            address, 
+            customer_phone, 
+            phone, 
+            customer_name,
+            payment_method 
+        } = req.body;
 
-        const finalVendorId = vendor_id || store_id;
+        // التأكد من استلام الـ store_id (استخدام vendor_id كبديل للتوافقية)
+        const finalStoreId = store_id || vendor_id;
         const finalAddress = address || delivery_address;
         const finalPhone = phone || customer_phone;
+        const finalPaymentMethod = payment_method || 'Cash on Delivery';
+        const finalDeliveryFee = parseFloat(delivery_fee) || 0;
 
-        if (!finalVendorId) {
-            return res.status(400).json({ error: "معرف المتجر (vendor_id/store_id) مطلوب" });
+        if (!finalStoreId) {
+            return res.status(400).json({ error: "معرف المتجر (store_id) مطلوب" });
         }
 
         if (!items || items.length === 0) {
             return res.status(400).json({ error: "السلة فاضية يا بطل!" });
         }
 
+        // حساب items_price لو مش موجود (جمع سعر كل قطعة * الكمية)
+        let calculatedItemsPrice = 0;
+        const parsedItems = typeof items === 'string' ? JSON.parse(items) : items;
+        
+        if (items_price) {
+            calculatedItemsPrice = parseFloat(items_price) || 0;
+        } else {
+            calculatedItemsPrice = parsedItems.reduce((acc, item) => {
+                const price = parseFloat(item.price) || 0;
+                const quantity = parseInt(item.quantity) || 1;
+                return acc + (price * quantity);
+            }, 0);
+        }
+
+        // التأكد من أن السعر الإجمالي مظبوط (لو مش موجود نجمع items_price + delivery_fee)
+        const finalTotalPrice = total_price || (calculatedItemsPrice + finalDeliveryFee);
+
         // items should be sent as direct object for jsonb columns in pg
-        const finalItems = typeof items === 'string' ? items : JSON.stringify(items);
+        const finalItemsJson = typeof items === 'string' ? items : JSON.stringify(items);
 
         const orderResult = await pool.query(
-            "INSERT INTO orders (user_id, vendor_id, total_price, address, phone, customer_name, items) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
-            [user_id, finalVendorId, total_price, finalAddress, finalPhone, customer_name, finalItems]
+            "INSERT INTO orders (user_id, store_id, total_price, items_price, delivery_fee, address, phone, customer_name, items, payment_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
+            [user_id, finalStoreId, finalTotalPrice, calculatedItemsPrice, finalDeliveryFee, finalAddress, finalPhone, customer_name, finalItemsJson, finalPaymentMethod]
         );
         const orderId = orderResult.rows[0].id;
 
@@ -527,8 +628,7 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
         res.status(500).json({ 
             error: "حصلت مشكلة واحنا بنأكد الطلب", 
             details: err.message,
-            stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
-            hint: "تأكد أن أسماء الأعمدة في قاعدة البيانات مطابقة للأكواد (vendor_id, address, phone, items)"
+            hint: "تأكد من أن أسماء الأعمدة في قاعدة البيانات مطابقة (store_id, payment_method, address, items, items_price, delivery_fee)"
         });
     }
 });
@@ -538,20 +638,37 @@ app.patch('/api/orders/:id/status', authenticateToken, authorizeSeller, async (r
     try {
         const { id } = req.params;
         const { status } = req.body;
+        const userId = req.user.id;
         
-        const validStatuses = ['pending', 'accepted', 'rejected', 'Delivered', 'OnTheWay', 'Preparing'];
+        // 1. التأكد من حالة الطلب المرسلة
+        const validStatuses = ['Pending', 'accepted', 'rejected', 'Delivered', 'OnTheWay', 'Preparing', 'Ready', 'Completed', 'Cancelled'];
         if (!validStatuses.includes(status)) {
             return res.status(400).json({ error: "حالة الطلب غير صالحة" });
         }
 
+        // 2. التحقق من أن هذا الطلب يخص متجر هذا المستخدم (البائع)
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [userId]);
+        if (storeResult.rows.length === 0) {
+            return res.status(403).json({ error: "ليس لديك مطعم مسجل" });
+        }
+        const storeIdFromUser = storeResult.rows[0].id;
+
+        // التحقق من ملكية الطلب للمتجر قبل التعديل
+        const orderCheck = await pool.query("SELECT store_id FROM orders WHERE id = $1", [id]);
+        if (orderCheck.rows.length === 0) {
+            return res.status(404).json({ error: "الطلب غير موجود" });
+        }
+        
+        if (orderCheck.rows[0].store_id !== storeIdFromUser) {
+            return res.status(403).json({ error: "لا يمكنك تعديل طلب لا يخص متجرك" });
+        }
+
+        // 3. تحديث الحالة
         const updatedOrder = await pool.query(
             "UPDATE orders SET status = $1 WHERE id = $2 RETURNING *",
             [status, id]
         );
         
-        if (updatedOrder.rows.length === 0) {
-            return res.status(404).json({ error: "الطلب غير موجود" });
-        }
         res.json(updatedOrder.rows[0]);
     } catch (err) {
         console.error("Update Status Error:", err);
@@ -586,7 +703,7 @@ app.get('/api/orders/store/:storeId', async (req, res) => {
              FROM orders o
              JOIN users u1 ON o.user_id = u1.id 
              LEFT JOIN users u2 ON o.driver_id = u2.id 
-             WHERE o.vendor_id = $1 
+             WHERE o.store_id = $1 
              ORDER BY o.created_at DESC
              LIMIT $2 OFFSET $3`,
             [storeId, limit, offset]

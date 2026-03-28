@@ -55,11 +55,12 @@ async function verify() {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${custToken}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                vendor_id: vendorId,
+                store_id: vendorId, // Using store_id now
                 total_price: 250,
                 address: '123 Test St',
                 phone: '01012345678',
                 customer_name: 'John Doe',
+                payment_method: 'Cash on Delivery',
                 items: [{ id: 1, name: 'Pizza', quantity: 2, price: 125 }]
             })
         });
