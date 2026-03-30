@@ -12,14 +12,20 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const app = express();
 const allowedOrigins = [
     'https://backend-delivery-ten.vercel.app',
+    'https://frontend-delivery-sooty.vercel.app', // الرابط الجديد للـ Frontend
     'http://localhost:3000',
     'http://localhost:5173',
     'http://localhost:5000'
 ];
 
+// إضافة الرابط من ملف الـ .env لو موجود
+if (process.env.FRONTEND_URL) {
+    allowedOrigins.push(process.env.FRONTEND_URL);
+}
+
 app.use(cors({
     origin: function (origin, callback) {
-        // السماح بطلبات الـ Localhost وأي رابط من قائمة الـ Whitelist أو بدون origin
+        // السماح بطلبات الـ Localhost وأي رابط من قائمة الـ Whitelist أو بدون origin (للأدوات مثل Postman)
         if (!origin || 
             allowedOrigins.includes(origin) || 
             origin.includes('localhost') || 
@@ -28,7 +34,8 @@ app.use(cors({
             callback(null, true);
         } else {
             console.log('Blocked by CORS:', origin);
-            callback(new Error('Not allowed by CORS'));
+            // بدلاً من إرجاع Error يوقف السيرفر، بنقوله false عشان يرفض الـ Origin بس
+            callback(null, false);
         }
     },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
@@ -295,7 +302,12 @@ app.post('/api/register', async (req, res) => {
 // --- 2. API تسجيل الدخول (Login) مع حماية الحظر ---
 app.post('/api/login', async (req, res) => {
     try {
+        console.log(`[Login Attempt] Email: ${req.body?.email}`);
         const { email, password } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({ error: "البريد وكلمة المرور مطلوبان" });
+        }
 
         // 1. البحث عن المستخدم
         const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
@@ -307,16 +319,20 @@ app.post('/api/login', async (req, res) => {
         const user = userResult.rows[0];
 
         // 2. الكارت الأحمر (التحقق من الحظر)
-        // لو الأدمن خلى is_blocked = true، السيرفر هيوقف العملية هنا
         if (user.is_blocked === true) {
             return res.status(403).json({ error: "حسابك محظور يا صاحبي.. راجع الإدارة!" });
         }
 
         // 3. مقارنة الباسورد
+        if (!user.password) {
+            console.error(`[Login Error] User ${email} has no password set (possibly Google-only).`);
+            return res.status(400).json({ error: "هذا الحساب مسجل بواسطة جوجل، يرجى الدخول بجوجل أو تعيين كلمة مرور." });
+        }
+
         const trimmedPassword = password ? password.trim() : '';
         const validPassword = await bcrypt.compare(trimmedPassword, user.password);
         
-        console.log(`[Login Verify] Email: ${email} | Result (true/false):`, validPassword);
+        console.log(`[Login Verify] Email: ${email} | Result:`, validPassword);
 
         if (!validPassword) {
             return res.status(400).json({ error: "الباسورد غلط يا صاحبي" });
@@ -332,9 +348,9 @@ app.post('/api/login', async (req, res) => {
             }
         }
 
-        // 5. إنشاء الـ Token (كارت الدخول) مع التأكد من وجود الـ Secret
+        // 5. إنشاء الـ Token
         if (!process.env.JWT_SECRET) {
-            console.error("❌ JWT_SECRET is missing from environment variables!");
+            console.error("❌ JWT_SECRET is missing!");
             return res.status(500).json({ error: "خطأ في إعدادات السيرفر (JWT)" });
         }
 
@@ -359,8 +375,12 @@ app.post('/api/login', async (req, res) => {
         });
 
     } catch (err) {
-        console.error("❌ Login Error Details:", err);
-        res.status(500).json({ error: "فشل تسجيل الدخول: " + err.message });
+        console.error("Login Crash:", err);
+        res.status(500).json({ 
+            success: false, 
+            error: "فشل تسجيل الدخول: " + err.message,
+            stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+        });
     }
 });
 
