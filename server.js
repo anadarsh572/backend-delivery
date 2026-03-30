@@ -82,6 +82,18 @@ const updateDatabaseSchema = async () => {
             `ALTER TABLE stores ALTER COLUMN name DROP NOT NULL;`,
             `ALTER TABLE stores ALTER COLUMN owner_id DROP NOT NULL;`,
             `ALTER TABLE stores ALTER COLUMN category DROP NOT NULL;`,
+            
+            // --- Orders Table Fix ---
+            `CREATE TABLE IF NOT EXISTS orders (id SERIAL PRIMARY KEY);`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS user_id INTEGER;`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS store_id INTEGER;`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS total_price NUMERIC(10,2);`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name CHARACTER VARYING(255);`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_phone CHARACTER VARYING(50);`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_address TEXT;`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method CHARACTER VARYING(50) DEFAULT 'cash';`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`,
+            
             `DO $$ 
             BEGIN 
                 IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='store_name') THEN 
@@ -124,6 +136,16 @@ const updateDatabaseSchema = async () => {
 
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='delivery_fee') THEN 
                     ALTER TABLE orders ADD COLUMN delivery_fee NUMERIC(10,2) DEFAULT 15;
+                END IF;
+
+                -- Add status column if not exists
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='status') THEN 
+                    ALTER TABLE orders ADD COLUMN status CHARACTER VARYING(50) DEFAULT 'Pending';
+                END IF;
+
+                -- Add items column if not exists (for storing order contents)
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='items') THEN 
+                    ALTER TABLE orders ADD COLUMN items TEXT;
                 END IF;
             END $$;`
         ];
@@ -294,8 +316,11 @@ app.post('/api/register', async (req, res) => {
             status: finalRole === 'seller' ? 'pending' : 'active'
         });
     } catch (err) {
-        console.error("❌ Register Error Details:", err);
-        res.status(500).json({ error: "فشل إنشاء الحساب: " + err.message });
+        console.error("Register Crash:", err);
+        res.status(500).json({ 
+            success: false, 
+            error: "فشل إنشاء الحساب: " + err.message 
+        });
     }
 });
 
@@ -378,8 +403,7 @@ app.post('/api/login', async (req, res) => {
         console.error("Login Crash:", err);
         res.status(500).json({ 
             success: false, 
-            error: "فشل تسجيل الدخول: " + err.message,
-            stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+            error: err.message 
         });
     }
 });
@@ -580,14 +604,21 @@ app.patch('/api/user/profile', authenticateToken, async (req, res) => {
 
 app.post('/api/products', async (req, res) => {
     try {
-        const { store_id, name, description, price, image_url, category } = req.body;
+        const { store_id, storeId, name, description, price, image_url, category } = req.body;
+        const finalStoreId = store_id || storeId;
+
+        if (!finalStoreId) {
+            return res.status(400).json({ error: "معرف المتجر (store_id) مطلوب" });
+        }
+
         const newProduct = await pool.query(
             "INSERT INTO products (store_id, name, description, price, image_url, category) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
-            [store_id, name, description, price, image_url, category]
+            [finalStoreId, name, description, price, image_url, category]
         );
         res.status(201).json(newProduct.rows[0]);
     } catch (err) {
-        res.status(500).json({ error: "Error adding product" });
+        console.error("❌ Add Product Error:", err);
+        res.status(500).json({ error: "خطأ في إضافة المنتج: " + err.message });
     }
 });
 
@@ -668,15 +699,20 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
             "INSERT INTO orders (user_id, store_id, total_price, items_price, delivery_fee, customer_address, customer_phone, customer_name, items, payment_method) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
             [user_id, finalStoreId, finalTotalPrice, calculatedItemsPrice, finalDeliveryFee, finalAddress, finalPhone, customer_name, finalItemsJson, finalPaymentMethod]
         );
+        
+        if (orderResult.rows.length === 0) {
+            throw new Error("لم يتم إدراج الطلب بنجاح");
+        }
+        
         const orderId = orderResult.rows[0].id;
-
         res.status(200).json({ status: "success", message: "تم استقبال الطلب بنجاح وحفظه في قاعدة البيانات", orderId });
     } catch (err) {
         console.error("❌ خطأ في إنشاء الطلب:", err);
         res.status(500).json({ 
-            error: "حصلت مشكلة واحنا بنأكد الطلب", 
+            success: false,
+            error: "فشل تأكيد الطلب", 
             details: err.message,
-            hint: "تأكد من أن أسماء الأعمدة في قاعدة البيانات مطابقة (store_id, payment_method, address, items, items_price, delivery_fee)"
+            hint: "تأكد من وجود جدول orders والأعمدة (user_id, store_id, total_price, items_price, delivery_fee, customer_address, customer_phone, customer_name, items, payment_method)"
         });
     }
 });
