@@ -866,9 +866,10 @@ app.get('/api/admin/stats', authenticateToken, authorizeAdmin, async (req, res) 
 app.get('/api/admin/orders', authenticateToken, authorizeAdmin, async (req, res) => {
     try {
         const result = await pool.query(
-            `SELECT o.*, u.name as customer_name 
+            `SELECT o.*, u.name as customer_name, s.name as store_name
              FROM orders o 
              JOIN users u ON o.user_id = u.id 
+             LEFT JOIN stores s ON o.store_id = s.id
              ORDER BY o.created_at DESC`
         );
         res.json(result.rows);
