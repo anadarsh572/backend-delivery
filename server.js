@@ -94,6 +94,20 @@ const updateDatabaseSchema = async () => {
             `ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method CHARACTER VARYING(50) DEFAULT 'cash';`,
             `ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`,
             
+            // --- الحماية من الأعمدة القديمة اللي ممكن تعطل الشغل (Fix NOT NULL constraints) ---
+            `DO $$ 
+            BEGIN 
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='delivery_address') THEN 
+                    ALTER TABLE orders ALTER COLUMN delivery_address DROP NOT NULL;
+                END IF;
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='phone') THEN 
+                    ALTER TABLE orders ALTER COLUMN phone DROP NOT NULL;
+                END IF;
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='address') THEN 
+                    ALTER TABLE orders ALTER COLUMN address DROP NOT NULL;
+                END IF;
+            END $$;`,
+            
             `DO $$ 
             BEGIN 
                 IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='store_name') THEN 
