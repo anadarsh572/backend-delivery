@@ -581,7 +581,7 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
 app.patch('/api/user/profile', authenticateToken, async (req, res) => {
     try {
         const userId = req.user.id;
-        const { name, phone } = req.body;
+        const { name, phone, address } = req.body;
 
         // Validation
         if (!name || typeof name !== 'string' || name.trim() === '') {
@@ -594,8 +594,8 @@ app.patch('/api/user/profile', authenticateToken, async (req, res) => {
 
         // Update user
         const updateResult = await pool.query(
-            "UPDATE users SET name = $1, phone = $2 WHERE id = $3 RETURNING name, email, phone, role",
-            [name.trim(), phone.trim(), userId]
+            "UPDATE users SET name = $1, phone = $2, address = $3 WHERE id = $4 RETURNING id, name, email, phone, address, role",
+            [name.trim(), phone.trim(), address ? address.trim() : null, userId]
         );
 
         if (updateResult.rows.length === 0) {
@@ -677,8 +677,8 @@ app.post('/api/orders', authenticateToken, async (req, res) => {
 
         // Alignment for mapping
         const finalStoreId = store_id || vendor_id;
-        const finalAddress = customer_address;
-        const finalPhone = customer_phone;
+        const finalAddress = customer_address || address || delivery_address || '';
+        const finalPhone = customer_phone || phone || '';
         const finalPaymentMethod = payment_method || 'cash';
         const finalDeliveryFee = parseFloat(delivery_fee) || 15;
 
