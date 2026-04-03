@@ -180,7 +180,17 @@ const updateDatabaseSchema = async () => {
                 name CHARACTER VARYING(255),
                 price NUMERIC(10,2) DEFAULT 0,
                 active BOOLEAN DEFAULT true
-            );`
+            );`,
+
+            // --- Users Table Fix ---
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT false;`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS store_category CHARACTER VARYING(100);`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone CHARACTER VARYING(50);`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS address TEXT;`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(10,2) DEFAULT 0;`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;`,
+            // Sync is_active and is_blocked if both exist
+            `UPDATE users SET is_active = NOT is_blocked WHERE is_active IS NULL;`
         ];
 
         for (let q of queries) {
@@ -243,7 +253,7 @@ const authorizeAdmin = (req, res, next) => {
 };
 // بوديجارد البائع
 const authorizeSeller = (req, res, next) => {
-    if (req.user && (req.user.role === 'seller' || req.user.role === 'vendor' || req.user.role === 'admin')) {
+    if (req.user && (req.user.role === 'vendor' || req.user.role === 'admin' || req.user.role === 'seller' || req.user.role === 'owner')) {
         next();
     } else {
         res.status(403).json({ error: "لازم تكون صاحب مطعم عشان تدخل هنا" });
@@ -448,14 +458,14 @@ app.post('/api/register', async (req, res) => {
     try {
         const { name, email, phone, role, address, password, store_category } = req.body;
         
-        // التحقق من نوع الحساب المختار
-        let finalRole = 'user';
+        // التحقق من نوع الحساب المختار (توحيد الأدوار)
+        let finalRole = 'customer';
         let is_blocked = false;
         let finalStoreCategory = null;
         
         if (role === 'seller' || role === 'vendor' || role === 'بائع') {
-            finalRole = 'seller';
-            is_blocked = true; // Pending admin approval
+            finalRole = 'vendor';
+            is_blocked = true; // Pending admin approval for vendors
             finalStoreCategory = store_category || 'restaurant'; 
         }
 
@@ -464,13 +474,16 @@ app.post('/api/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(trimmedPassword, salt);
         
         const newUser = await pool.query(
-            "INSERT INTO users (name, email, phone, role, address, password, is_blocked, store_category) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, name, email, role, is_blocked, store_category",
-            [name, email, phone, finalRole, address, hashedPassword, is_blocked, finalStoreCategory]
+            "INSERT INTO users (name, email, phone, role, address, password, is_blocked, store_category, is_active) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, name, email, role, is_blocked, store_category",
+            [name, email, phone, finalRole, address, hashedPassword, is_blocked, finalStoreCategory, !is_blocked]
         );
         res.status(201).json({ 
             message: "Account created successfully!", 
-            user: newUser.rows[0],
-            status: finalRole === 'seller' ? 'pending' : 'active'
+            user: {
+                ...newUser.rows[0],
+                role: newUser.rows[0].role // returns vendor/customer
+            },
+            status: finalRole === 'vendor' ? 'pending' : 'active'
         });
     } catch (err) {
         console.error("Register Crash:", err);
@@ -536,8 +549,16 @@ app.post('/api/login', async (req, res) => {
             return res.status(500).json({ error: "خطأ في إعدادات السيرفر (JWT)" });
         }
 
+        // توحيد الأدوار للـ Token والرد
+        let finalRole = user.role;
+        if (user.role === 'seller' || user.role === 'vendor' || user.role === 'owner') {
+            finalRole = 'vendor';
+        } else if (user.role === 'user') {
+            finalRole = 'customer';
+        }
+
         const token = jwt.sign(
-            { id: user.id, role: user.role },
+            { id: user.id, role: finalRole }, 
             process.env.JWT_SECRET,
             { expiresIn: '1d' }
         );
@@ -547,10 +568,10 @@ app.post('/api/login', async (req, res) => {
         const lastName = nameParts.slice(1).join(' ') || '';
 
         let permissions = [];
-        let finalRole = user.role;
-        if (user.role === 'seller' || user.role === 'vendor' || user.role === 'owner') {
-            finalRole = 'owner';
+        if (finalRole === 'vendor') {
             permissions = ['manage_orders', 'manage_products', 'manage_settings'];
+        } else if (finalRole === 'admin') {
+            permissions = ['manage_everything'];
         } else if (user.role === 'manager') {
             permissions = ['manage_orders'];
         }
@@ -686,7 +707,7 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
         
         let has_store = false;
         let store_id = null;
-        if (user.role === 'seller' || user.role === 'vendor') {
+        if (user.role === 'seller' || user.role === 'vendor' || user.role === 'vendor') {
             const storeCheck = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [user.id]);
             if (storeCheck.rows.length > 0) {
                 has_store = true;
@@ -701,8 +722,10 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
         let permissions = [];
         let finalRole = user.role;
         if (user.role === 'seller' || user.role === 'vendor' || user.role === 'owner') {
-            finalRole = 'owner';
+            finalRole = 'vendor';
             permissions = ['manage_orders', 'manage_products', 'manage_settings'];
+        } else if (user.role === 'user' || user.role === 'customer') {
+            finalRole = 'customer';
         } else if (user.role === 'manager') {
             permissions = ['manage_orders'];
         }
@@ -1022,8 +1045,8 @@ app.get('/api/admin/users', authenticateToken, authorizeAdmin, async (req, res) 
         const formattedUsers = result.rows.map(user => ({
             ...user,
             _id: user.id.toString(), // لإرجاع _id كما في المثال
-            role: user.role === 'user' ? 'customer' : 
-                  (user.role === 'seller' || user.role === 'vendor') ? 'vendor' : 
+            role: (user.role === 'user' || user.role === 'customer') ? 'customer' : 
+                  (user.role === 'seller' || user.role === 'vendor' || user.role === 'owner') ? 'vendor' : 
                   user.role,
             is_active: !user.is_blocked
         }));
@@ -1042,7 +1065,7 @@ app.get('/api/admin/vendors', authenticateToken, authorizeAdmin, async (req, res
             `SELECT u.id, u.name, u.email, u.phone, s.name as store_name, s.category, s.subscription_status 
              FROM users u 
              JOIN stores s ON u.id = s.owner_id 
-             WHERE u.role = 'seller' OR u.role = 'vendor'`
+             WHERE u.role = 'vendor' OR u.role = 'seller' OR u.role = 'owner'`
         );
         res.json(result.rows);
     } catch (err) {
@@ -1091,8 +1114,8 @@ app.patch('/api/admin/users/:id/role', authenticateToken, authorizeAdmin, async 
         let { role } = req.body; 
 
         // تحويل الأدوار من الفرونت إند إلى ما يقابلها في قاعدة البيانات
-        if (role === 'customer') role = 'user';
-        else if (role === 'vendor') role = 'seller';
+        if (role === 'customer') role = 'customer'; // standardized
+        else if (role === 'vendor') role = 'vendor'; // standardized
 
         const updatedUser = await pool.query(
             "UPDATE users SET role = $1 WHERE id = $2 RETURNING id, name, email, role, is_blocked",
@@ -1105,8 +1128,8 @@ app.patch('/api/admin/users/:id/role', authenticateToken, authorizeAdmin, async 
         const formattedUser = {
             ...updatedUser.rows[0],
             _id: updatedUser.rows[0].id.toString(),
-            role: updatedUser.rows[0].role === 'user' ? 'customer' : 
-                  (updatedUser.rows[0].role === 'seller' || updatedUser.rows[0].role === 'vendor') ? 'vendor' : 
+            role: (updatedUser.rows[0].role === 'user' || updatedUser.rows[0].role === 'customer') ? 'customer' : 
+                  (updatedUser.rows[0].role === 'seller' || updatedUser.rows[0].role === 'vendor' || updatedUser.rows[0].role === 'owner') ? 'vendor' : 
                   updatedUser.rows[0].role,
             is_active: !updatedUser.rows[0].is_blocked
         };
