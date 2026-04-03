@@ -1017,7 +1017,18 @@ app.get('/api/admin/users', authenticateToken, authorizeAdmin, async (req, res) 
     try {
         // يجلب كل المستخدمين مع بياناتهم (الاسم، الإيميل، الحالة، الدور، وتصنيف المتجر store_category)
         const result = await pool.query("SELECT id, name, email, phone, role, is_blocked, store_category, created_at FROM users ORDER BY created_at DESC");
-        res.json(result.rows);
+        
+        // التحويل للتنسيق المطلوب من الفرونت إند
+        const formattedUsers = result.rows.map(user => ({
+            ...user,
+            _id: user.id.toString(), // لإرجاع _id كما في المثال
+            role: user.role === 'user' ? 'customer' : 
+                  (user.role === 'seller' || user.role === 'vendor') ? 'vendor' : 
+                  user.role,
+            is_active: !user.is_blocked
+        }));
+
+        res.json({ users: formattedUsers });
     } catch (err) {
         console.error("Admin Fetch Users Error:", err.message);
         res.status(500).json({ error: "فشل جلب المستخدمين" });
@@ -1066,7 +1077,7 @@ app.get('/api/admin/orders', authenticateToken, authorizeAdmin, async (req, res)
              LEFT JOIN stores s ON o.store_id = s.id
              ORDER BY o.created_at DESC`
         );
-        res.json(result.rows);
+        res.json({ orders: result.rows });
     } catch (err) {
         console.error("Admin Fetch Orders Error:", err.message);
         res.status(500).json({ error: "فشل جلب كافة الطلبات" });
@@ -1077,7 +1088,11 @@ app.get('/api/admin/orders', authenticateToken, authorizeAdmin, async (req, res)
 app.patch('/api/admin/users/:id/role', authenticateToken, authorizeAdmin, async (req, res) => {
     try {
         const { id } = req.params;
-        const { role } = req.body; 
+        let { role } = req.body; 
+
+        // تحويل الأدوار من الفرونت إند إلى ما يقابلها في قاعدة البيانات
+        if (role === 'customer') role = 'user';
+        else if (role === 'vendor') role = 'seller';
 
         const updatedUser = await pool.query(
             "UPDATE users SET role = $1 WHERE id = $2 RETURNING id, name, email, role, is_blocked",
@@ -1086,7 +1101,17 @@ app.patch('/api/admin/users/:id/role', authenticateToken, authorizeAdmin, async 
 
         if (updatedUser.rows.length === 0) return res.status(404).json({ error: "المستخدم غير موجود" });
 
-        res.json({ message: "تم تحديث دور المستخدم بنجاح!", user: updatedUser.rows[0] });
+        // إرجاع البيانات بالتنسيق المطلوب
+        const formattedUser = {
+            ...updatedUser.rows[0],
+            _id: updatedUser.rows[0].id.toString(),
+            role: updatedUser.rows[0].role === 'user' ? 'customer' : 
+                  (updatedUser.rows[0].role === 'seller' || updatedUser.rows[0].role === 'vendor') ? 'vendor' : 
+                  updatedUser.rows[0].role,
+            is_active: !updatedUser.rows[0].is_blocked
+        };
+
+        res.json({ message: "تم تحديث دور المستخدم بنجاح!", user: formattedUser });
     } catch (err) {
         res.status(500).json({ error: "فشل تحديث الدور" });
     }
@@ -1097,7 +1122,11 @@ app.patch('/api/admin/users/:id/status', authenticateToken, authorizeAdmin, asyn
     try {
         const { id } = req.params;
         // نأخذ القيمة سواء كانت is_blocked أو عكس is_active
-        const is_blocked = req.body.is_blocked !== undefined ? req.body.is_blocked : !req.body.is_active;
+        const is_blocked = req.body.is_blocked !== undefined ? req.body.is_blocked : (req.body.is_active !== undefined ? !req.body.is_active : undefined);
+
+        if (is_blocked === undefined) {
+            return res.status(400).json({ error: "يجب إرسال is_active أو is_blocked" });
+        }
 
         const updatedUser = await pool.query(
             "UPDATE users SET is_blocked = $1 WHERE id = $2 RETURNING id, name, email, role, is_blocked",
@@ -1106,13 +1135,17 @@ app.patch('/api/admin/users/:id/status', authenticateToken, authorizeAdmin, asyn
 
         if (updatedUser.rows.length === 0) return res.status(404).json({ error: "المستخدم غير موجود" });
 
-        if (is_blocked === false) {
-            console.log('User unblocked:', id);
-        } else {
-            console.log('User blocked:', id);
-        }
+        // إرجاع البيانات بالتنسيق المطلوب
+        const formattedUser = {
+            ...updatedUser.rows[0],
+            _id: updatedUser.rows[0].id.toString(),
+            role: updatedUser.rows[0].role === 'user' ? 'customer' : 
+                  (updatedUser.rows[0].role === 'seller' || updatedUser.rows[0].role === 'vendor') ? 'vendor' : 
+                  updatedUser.rows[0].role,
+            is_active: !updatedUser.rows[0].is_blocked
+        };
 
-        res.json({ message: "تم تغيير حالة الحظر بنجاح!", user: updatedUser.rows[0] });
+        res.json({ message: "تم تغيير حالة الحظر بنجاح!", user: formattedUser });
     } catch (err) {
         console.error("Admin Status Update Error:", err);
         res.status(500).json({ error: "فشل تحديث الحالة" });
