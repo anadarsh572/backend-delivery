@@ -80,6 +80,8 @@ const updateDatabaseSchema = async () => {
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS owner_id INTEGER;`,
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS category CHARACTER VARYING(100);`,
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS logo VARCHAR(255);`,
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS cover VARCHAR(255);`,
             `ALTER TABLE stores ALTER COLUMN name DROP NOT NULL;`,
             `ALTER TABLE stores ALTER COLUMN owner_id DROP NOT NULL;`,
             `ALTER TABLE stores ALTER COLUMN category DROP NOT NULL;`,
@@ -162,7 +164,23 @@ const updateDatabaseSchema = async () => {
                 IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='items') THEN 
                     ALTER TABLE orders ADD COLUMN items TEXT;
                 END IF;
-            END $$;`
+            END $$;`,
+
+            // --- Products Table Extensions ---
+            `CREATE TABLE IF NOT EXISTS products (id SERIAL PRIMARY KEY);`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS colors TEXT;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS sizes TEXT;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS stock_count INTEGER DEFAULT 0;`,
+
+            // --- Shipping Rates Table ---
+            `CREATE TABLE IF NOT EXISTS shipping_rates (
+                id SERIAL PRIMARY KEY,
+                store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE,
+                region_id INTEGER,
+                name CHARACTER VARYING(255),
+                price NUMERIC(10,2) DEFAULT 0,
+                active BOOLEAN DEFAULT true
+            );`
         ];
 
         for (let q of queries) {
@@ -266,19 +284,97 @@ app.get('/api/vendor/stats', authenticateToken, authorizeSeller, async (req, res
         if (storeResult.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
         const storeId = storeResult.rows[0].id;
 
+        const filter = req.query.filter || 'All';
+        let dateCondition = "1=1";
+        if (filter.toLowerCase() === 'day') dateCondition = "created_at >= NOW() - INTERVAL '1 day'";
+        else if (filter.toLowerCase() === 'week') dateCondition = "created_at >= NOW() - INTERVAL '7 days'";
+        else if (filter.toLowerCase() === 'month') dateCondition = "created_at >= NOW() - INTERVAL '1 month'";
+        else if (filter.toLowerCase() === 'year') dateCondition = "created_at >= NOW() - INTERVAL '1 year'";
+
         const statsQuery = `
             SELECT 
                 COUNT(*) as total_orders,
-                SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending_orders,
-                SUM(CASE WHEN status = 'Delivered' THEN total_price ELSE 0 END) as total_revenue
+                SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending_info,
+                SUM(CASE WHEN status IN ('Delivered', 'Completed') THEN total_price ELSE 0 END) as total_revenue,
+                SUM(CASE WHEN status IN ('Delivered', 'Completed') THEN 1 ELSE 0 END) as delivered_orders,
+                COUNT(DISTINCT user_id) as total_users
             FROM orders 
-            WHERE store_id = $1
+            WHERE store_id = $1 AND ${dateCondition}
         `;
-        const result = await pool.query(statsQuery, [storeId]);
-        res.json(result.rows[0]);
+        const productsCountQuery = `SELECT COUNT(*) as total_products FROM products WHERE store_id = $1`;
+
+        const [statsResult, productsResult] = await Promise.all([
+            pool.query(statsQuery, [storeId]),
+            pool.query(productsCountQuery, [storeId])
+        ]);
+
+        const rawStats = statsResult.rows[0];
+        const totalRevenue = parseFloat(rawStats.total_revenue) || 0;
+
+        res.json({
+            total_orders: parseInt(rawStats.total_orders) || 0,
+            pending_info: parseInt(rawStats.pending_info) || 0,
+            total_revenue: totalRevenue,
+            net_profit: parseFloat((totalRevenue * 0.90).toFixed(2)),
+            delivered_orders: parseInt(rawStats.delivered_orders) || 0,
+            total_users: parseInt(rawStats.total_users) || 0,
+            total_products: parseInt(productsResult.rows[0].total_products) || 0
+        });
     } catch (err) {
         console.error("❌ Vendor Stats Error:", err);
         res.status(500).json({ error: "فشل جلب الإحصائيات" });
+    }
+});
+
+// API لجلب إشعارات المتجر والعدادات (Store Summary)
+app.get('/api/store/summary', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
+        const storeId = storeResult.rows[0].id;
+
+        const summaryQuery = `
+            SELECT 
+                SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending_orders
+            FROM orders 
+            WHERE store_id = $1
+        `;
+        const result = await pool.query(summaryQuery, [storeId]);
+        
+        res.json({
+            pendingOrders: parseInt(result.rows[0].pending_orders || 0),
+            unreadMessages: 0,
+            notifications: 0
+        });
+    } catch (err) {
+        console.error("❌ Store Summary Error:", err);
+        res.status(500).json({ error: "فشل جلب العدادات والإشعارات" });
+    }
+});
+
+// API لتحديث إعدادات المتجر البصرية (Store Settings API)
+app.patch('/api/vendor/store/settings', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const { logo, cover } = req.body;
+        
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
+        const storeId = storeResult.rows[0].id;
+
+        const updateResult = await pool.query(
+            "UPDATE stores SET logo = COALESCE($1, logo), cover = COALESCE($2, cover) WHERE id = $3 RETURNING id, name, logo, cover",
+            [logo || null, cover || null, storeId]
+        );
+        
+        res.json({
+            message: "تم تحديث إعدادات المتجر بنجاح",
+            store: updateResult.rows[0]
+        });
+    } catch (err) {
+        console.error("❌ Store Settings Error:", err);
+        res.status(500).json({ error: "فشل تحديث إعدادات المتجر" });
     }
 });
 
@@ -295,6 +391,52 @@ app.get('/api/vendor/products', authenticateToken, authorizeSeller, async (req, 
     } catch (err) {
         console.error("❌ Vendor Fetch Products Error:", err);
         res.status(500).json({ error: "فشل جلب المنتجات الخاصة بك" });
+    }
+});
+
+// API لجلب أسعار مناطق الشحن
+app.get('/api/vendor/shipping/rates', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر مسجل" });
+        const storeId = storeResult.rows[0].id;
+        
+        const rates = await pool.query("SELECT * FROM shipping_rates WHERE store_id = $1 ORDER BY region_id ASC", [storeId]);
+        res.json(rates.rows);
+    } catch (err) {
+        console.error("❌ Fetch Shipping Rates Error:", err);
+        res.status(500).json({ error: "فشل جلب أعدادات الشحن" });
+    }
+});
+
+// API لتحديث أو إضافة أسعار الشحن
+app.put('/api/vendor/shipping/rates', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const ratesArray = req.body;
+        
+        if (!Array.isArray(ratesArray)) {
+            return res.status(400).json({ error: "البيانات يجب أن تكون Array of Objects" });
+        }
+        
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر مسجل" });
+        const storeId = storeResult.rows[0].id;
+        
+        await pool.query("DELETE FROM shipping_rates WHERE store_id = $1", [storeId]);
+        
+        for (let rate of ratesArray) {
+            await pool.query(
+                "INSERT INTO shipping_rates (store_id, region_id, name, price, active) VALUES ($1, $2, $3, $4, $5)",
+                [storeId, rate.region_id, rate.name, rate.price, rate.active]
+            );
+        }
+        
+        res.json({ message: "تم تحديث أسعار الشحن بنجاح" });
+    } catch (err) {
+        console.error("❌ Update Shipping Rates Error:", err);
+        res.status(500).json({ error: "فشل تحديث أعدادات الشحن" });
     }
 });
 
@@ -400,6 +542,19 @@ app.post('/api/login', async (req, res) => {
             { expiresIn: '1d' }
         );
 
+        const nameParts = (user.name || '').split(' ');
+        const firstName = nameParts[0] || '';
+        const lastName = nameParts.slice(1).join(' ') || '';
+
+        let permissions = [];
+        let finalRole = user.role;
+        if (user.role === 'seller' || user.role === 'vendor' || user.role === 'owner') {
+            finalRole = 'owner';
+            permissions = ['manage_orders', 'manage_products', 'manage_settings'];
+        } else if (user.role === 'manager') {
+            permissions = ['manage_orders'];
+        }
+
         // 6. الرد النهائي
         res.json({
             message: "Login successful",
@@ -407,10 +562,14 @@ app.post('/api/login', async (req, res) => {
             user: {
                 id: user.id,
                 name: user.name,
+                firstName: firstName,
+                lastName: lastName,
                 email: user.email,
-                role: user.role,
+                role: finalRole,
+                permissions: permissions,
                 has_store: has_store,
-                store_id: store_id
+                store_id: store_id,
+                storeId: store_id
             }
         });
 
@@ -477,16 +636,33 @@ app.post('/api/auth/google', async (req, res) => {
             }
         }
 
+        const nameParts = (user.name || '').split(' ');
+        const firstName = nameParts[0] || '';
+        const lastName = nameParts.slice(1).join(' ') || '';
+
+        let permissions = [];
+        let finalRole = user.role;
+        if (user.role === 'seller' || user.role === 'vendor' || user.role === 'owner') {
+            finalRole = 'owner';
+            permissions = ['manage_orders', 'manage_products', 'manage_settings'];
+        } else if (user.role === 'manager') {
+            permissions = ['manage_orders'];
+        }
+
         res.json({
             message: "Login successful with Google",
             token: token,
             user: {
                 id: user.id,
                 name: user.name,
+                firstName: firstName,
+                lastName: lastName,
                 email: user.email,
-                role: user.role,
+                role: finalRole,
+                permissions: permissions,
                 has_store: has_store,
-                store_id: store_id
+                store_id: store_id,
+                storeId: store_id
             }
         });
 
@@ -518,11 +694,29 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
             }
         }
 
+        const nameParts = (user.name || '').split(' ');
+        const firstName = nameParts[0] || '';
+        const lastName = nameParts.slice(1).join(' ') || '';
+
+        let permissions = [];
+        let finalRole = user.role;
+        if (user.role === 'seller' || user.role === 'vendor' || user.role === 'owner') {
+            finalRole = 'owner';
+            permissions = ['manage_orders', 'manage_products', 'manage_settings'];
+        } else if (user.role === 'manager') {
+            permissions = ['manage_orders'];
+        }
+
         res.json({
             user: {
                 ...user,
+                firstName: firstName,
+                lastName: lastName,
+                role: finalRole,
+                permissions: permissions,
                 has_store,
-                store_id
+                store_id,
+                storeId: store_id
             }
         });
     } catch (err) {
@@ -1134,7 +1328,7 @@ app.post('/api/vendor/pay-subscription', authenticateToken, authorizeSeller, asy
 });
 
 
-// --- 18. جلب المنتجات حسب القسم (مطاعم، كافيهات، ماركت) ---
+// --- 18. جلب المنتجات حسب القسم (مطاعم، سوبر ماركت) ---
 app.get('/api/products/category/:categoryName', async (req, res) => {
     try {
         const { categoryName } = req.params;
