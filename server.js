@@ -42,8 +42,8 @@ app.use(cors({
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // 📝 Logger بسيط عشان نعرف إيه اللي بيحصل في السيرفر
 app.use((req, res, next) => {
@@ -217,6 +217,7 @@ const updateDatabaseSchema = async () => {
 
             // --- Store Settings Updates ---
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS logo_url TEXT;`,
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS display_name VARCHAR(255);`,
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS opening_hours VARCHAR(100);`,
             `ALTER TABLE stores ADD COLUMN IF NOT EXISTS is_open BOOLEAN DEFAULT true;`
         ];
@@ -458,7 +459,10 @@ app.put('/api/vendor/settings', authenticateToken, authorizeSeller, async (req, 
             [name, display_name, address, phone, logo_url, opening_hours, is_open, req.user.id]
         );
         res.json(result.rows[0]);
-    } catch (err) { res.status(500).json({ error: "فشل تحديث إعدادات المتجر" }); }
+    } catch (err) { 
+        console.error("❌ Vendor Settings Update Error:", err);
+        res.status(500).json({ error: "فشل تحديث إعدادات المتجر", details: err.message }); 
+    }
 });
 
 // API لجلب إشعارات المتجر والعدادات (Store Summary)
