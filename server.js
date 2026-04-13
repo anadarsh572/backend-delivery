@@ -166,11 +166,30 @@ const updateDatabaseSchema = async () => {
                 END IF;
             END $$;`,
 
+            // --- Categories Table ---
+            `CREATE TABLE IF NOT EXISTS categories (
+                id SERIAL PRIMARY KEY,
+                store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE,
+                name CHARACTER VARYING(255) NOT NULL,
+                image_url TEXT,
+                description TEXT,
+                is_active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );`,
+
             // --- Products Table Extensions ---
             `CREATE TABLE IF NOT EXISTS products (id SERIAL PRIMARY KEY);`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS description TEXT;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS price NUMERIC(10,2);`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;`,
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS colors TEXT;`,
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS sizes TEXT;`,
             `ALTER TABLE products ADD COLUMN IF NOT EXISTS stock_count INTEGER DEFAULT 0;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`,
 
             // --- Shipping Rates Table ---
             `CREATE TABLE IF NOT EXISTS shipping_rates (
@@ -190,7 +209,16 @@ const updateDatabaseSchema = async () => {
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(10,2) DEFAULT 0;`,
             `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;`,
             // Sync is_active and is_blocked if both exist
-            `UPDATE users SET is_active = NOT is_blocked WHERE is_active IS NULL;`
+            `UPDATE users SET is_active = NOT is_blocked WHERE is_active IS NULL;`,
+
+            // --- Coupons and Reviews Tables ---
+            `CREATE TABLE IF NOT EXISTS coupons (id SERIAL PRIMARY KEY, code VARCHAR(50), discount_percentage NUMERIC(5,2), expiry_date DATE, store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE);`,
+            `CREATE TABLE IF NOT EXISTS reviews (id SERIAL PRIMARY KEY, customer_name VARCHAR(255), rating INTEGER CHECK (rating >= 1 AND rating <= 5), comment TEXT, store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+
+            // --- Store Settings Updates ---
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS logo_url TEXT;`,
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS opening_hours VARCHAR(100);`,
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS is_open BOOLEAN DEFAULT true;`
         ];
 
         for (let q of queries) {
@@ -264,7 +292,6 @@ const authorizeSeller = (req, res, next) => {
 app.get('/api/vendor/orders', authenticateToken, authorizeSeller, async (req, res) => {
     try {
         const userId = req.user.id;
-        // أولاً: بنجيب معرف المتجر (store_id) الخاص بصاحب الحساب
         const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [userId]);
         
         if (storeResult.rows.length === 0) {
@@ -273,7 +300,7 @@ app.get('/api/vendor/orders', authenticateToken, authorizeSeller, async (req, re
         
         const storeId = storeResult.rows[0].id;
 
-        // ثانياً: بنفلتر الطلبات بناءً على store_id المتجر
+        // Fetch orders. Includes customer_name, customer_phone, items from the orders table
         const result = await pool.query(
             "SELECT * FROM orders WHERE store_id = $1 ORDER BY created_at DESC",
             [storeId]
@@ -285,11 +312,43 @@ app.get('/api/vendor/orders', authenticateToken, authorizeSeller, async (req, re
     }
 });
 
+// API لتحديث حالة الطلب
+app.put('/api/vendor/orders/:id/status', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const orderId = req.params.id;
+        const { status } = req.body;
+
+        const validStatuses = ['Pending', 'Preparing', 'Ready for Pickup', 'Completed', 'Cancelled'];
+        if (!validStatuses.includes(status)) {
+            return res.status(400).json({ error: "حالة غير صالحة" });
+        }
+
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [userId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
+        const storeId = storeResult.rows[0].id;
+
+        const orderCheck = await pool.query("SELECT id FROM orders WHERE id = $1 AND store_id = $2", [orderId, storeId]);
+        if (orderCheck.rows.length === 0) {
+            return res.status(404).json({ error: "الطلب غير موجود أو لا تملك صلاحية تعديله" });
+        }
+
+        const updateResult = await pool.query(
+            "UPDATE orders SET status = $1 WHERE id = $2 RETURNING *",
+            [status, orderId]
+        );
+        
+        res.json({ message: "تم تحديث حالة الطلب بنجاح", order: updateResult.rows[0] });
+    } catch (err) {
+        console.error("❌ Order Status Update Error:", err);
+        res.status(500).json({ error: "فشل تحديث حالة الطلب" });
+    }
+});
+
 // API لجلب إحصائيات التاجر (عدد الطلبات، الأرباح، المعلقة)
 app.get('/api/vendor/stats', authenticateToken, authorizeSeller, async (req, res) => {
     try {
         const vendorId = req.user.id;
-        // Get store_id first
         const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
         if (storeResult.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
         const storeId = storeResult.rows[0].id;
@@ -304,9 +363,9 @@ app.get('/api/vendor/stats', authenticateToken, authorizeSeller, async (req, res
         const statsQuery = `
             SELECT 
                 COUNT(*) as total_orders,
-                SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending_info,
-                SUM(CASE WHEN status IN ('Delivered', 'Completed') THEN total_price ELSE 0 END) as total_revenue,
-                SUM(CASE WHEN status IN ('Delivered', 'Completed') THEN 1 ELSE 0 END) as delivered_orders,
+                SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) as pending_orders,
+                SUM(CASE WHEN status = 'Completed' THEN total_price ELSE 0 END) as total_revenue,
+                SUM(CASE WHEN status = 'Completed' THEN 1 ELSE 0 END) as delivered_orders,
                 COUNT(DISTINCT user_id) as total_users
             FROM orders 
             WHERE store_id = $1 AND ${dateCondition}
@@ -323,7 +382,7 @@ app.get('/api/vendor/stats', authenticateToken, authorizeSeller, async (req, res
 
         res.json({
             total_orders: parseInt(rawStats.total_orders) || 0,
-            pending_info: parseInt(rawStats.pending_info) || 0,
+            pending_orders: parseInt(rawStats.pending_orders) || 0,
             total_revenue: totalRevenue,
             net_profit: parseFloat((totalRevenue * 0.90).toFixed(2)),
             delivered_orders: parseInt(rawStats.delivered_orders) || 0,
@@ -334,6 +393,72 @@ app.get('/api/vendor/stats', authenticateToken, authorizeSeller, async (req, res
         console.error("❌ Vendor Stats Error:", err);
         res.status(500).json({ error: "فشل جلب الإحصائيات" });
     }
+});
+
+// ============================================
+// Marketing & Management (Coupons, Reviews, Settings)
+// ============================================
+
+// --- Vendor Coupons API ---
+app.get('/api/vendor/coupons', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [req.user.id]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
+        const result = await pool.query("SELECT * FROM coupons WHERE store_id = $1 ORDER BY expiry_date DESC", [storeResult.rows[0].id]);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: "فشل جلب الكوبونات" }); }
+});
+
+app.post('/api/vendor/coupons', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const { code, discount_percentage, expiry_date } = req.body;
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [req.user.id]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
+        const result = await pool.query(
+            "INSERT INTO coupons (code, discount_percentage, expiry_date, store_id) VALUES ($1, $2, $3, $4) RETURNING *", 
+            [code, discount_percentage, expiry_date, storeResult.rows[0].id]
+        );
+        res.json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: "فشل إضافة الكوبون" }); }
+});
+
+app.delete('/api/vendor/coupons/:id', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [req.user.id]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
+        await pool.query("DELETE FROM coupons WHERE id = $1 AND store_id = $2", [req.params.id, storeResult.rows[0].id]);
+        res.json({ message: "تم حذف الكوبون بنجاح" });
+    } catch (err) { res.status(500).json({ error: "فشل حذف الكوبون" }); }
+});
+
+// --- Vendor Reviews API ---
+app.get('/api/vendor/reviews', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [req.user.id]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
+        const result = await pool.query("SELECT * FROM reviews WHERE store_id = $1 ORDER BY created_at DESC", [storeResult.rows[0].id]);
+        res.json(result.rows);
+    } catch (err) { res.status(500).json({ error: "فشل جلب التقييمات" }); }
+});
+
+// --- Vendor Settings API ---
+app.get('/api/vendor/settings', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const result = await pool.query("SELECT id, owner_id, name, display_name, address, phone, is_active, category, logo_url, opening_hours, is_open FROM stores WHERE owner_id = $1", [req.user.id]);
+        if (result.rows.length === 0) return res.status(404).json({ error: "لا يوجد متجر لهذا الحساب" });
+        res.json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: "فشل جلب إعدادات المتجر" }); }
+});
+
+app.put('/api/vendor/settings', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const { name, display_name, address, phone, logo_url, opening_hours, is_open } = req.body;
+        const result = await pool.query(
+            "UPDATE stores SET name = COALESCE($1, name), display_name = COALESCE($2, display_name), address = COALESCE($3, address), phone = COALESCE($4, phone), logo_url = COALESCE($5, logo_url), opening_hours = COALESCE($6, opening_hours), is_open = COALESCE($7, is_open) WHERE owner_id = $8 RETURNING id, owner_id, name, display_name, address, phone, is_active, category, logo_url, opening_hours, is_open",
+            [name, display_name, address, phone, logo_url, opening_hours, is_open, req.user.id]
+        );
+        res.json(result.rows[0]);
+    } catch (err) { res.status(500).json({ error: "فشل تحديث إعدادات المتجر" }); }
 });
 
 // API لجلب إشعارات المتجر والعدادات (Store Summary)
@@ -388,7 +513,101 @@ app.patch('/api/vendor/store/settings', authenticateToken, authorizeSeller, asyn
     }
 });
 
-// API لجلب منتجات التاجر فقط
+// ==========================================
+// Vendors: Categories APIs
+// ==========================================
+
+// 1. جلب الفئات
+app.get('/api/vendor/categories', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "المتجر غير موجود" });
+        const storeId = storeResult.rows[0].id;
+
+        const result = await pool.query("SELECT * FROM categories WHERE store_id = $1 ORDER BY id DESC", [storeId]);
+        res.json(result.rows);
+    } catch (err) {
+        console.error("❌ Fetch Categories Error:", err);
+        res.status(500).json({ error: "فشل جلب الفئات" });
+    }
+});
+
+// 2. إضافة فئة جديدة
+app.post('/api/vendor/categories', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const { name, image_url, description, is_active } = req.body;
+        
+        if (!name) return res.status(400).json({ error: "اسم الفئة مطلوب" });
+
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "المتجر غير موجود" });
+        const storeId = storeResult.rows[0].id;
+
+        const result = await pool.query(
+            "INSERT INTO categories (store_id, name, image_url, description, is_active) VALUES ($1, $2, $3, $4, $5) RETURNING *",
+            [storeId, name, image_url || null, description || null, is_active !== false]
+        );
+        res.status(201).json({ message: "تم إضافة الفئة بنجاح", category: result.rows[0] });
+    } catch (err) {
+        console.error("❌ Add Category Error:", err);
+        res.status(500).json({ error: "فشل إضافة الفئة" });
+    }
+});
+
+// 3. تعديل فئة
+app.put('/api/vendor/categories/:id', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const categoryId = req.params.id;
+        const { name, image_url, description, is_active } = req.body;
+        
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "المتجر غير موجود" });
+        const storeId = storeResult.rows[0].id;
+
+        const catCheck = await pool.query("SELECT id FROM categories WHERE id = $1 AND store_id = $2", [categoryId, storeId]);
+        if(catCheck.rows.length === 0) return res.status(404).json({ error: "الفئة غير موجودة أو لا تملك صلاحية تعديلها" });
+
+        const result = await pool.query(
+            "UPDATE categories SET name = $1, image_url = $2, description = $3, is_active = $4 WHERE id = $5 RETURNING *",
+            [name, image_url, description, is_active, categoryId]
+        );
+        res.json({ message: "تم تعديل الفئة بنجاح", category: result.rows[0] });
+    } catch (err) {
+        console.error("❌ Update Category Error:", err);
+        res.status(500).json({ error: "فشل تعديل الفئة" });
+    }
+});
+
+// 4. حذف فئة
+app.delete('/api/vendor/categories/:id', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const categoryId = req.params.id;
+        
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "المتجر غير موجود" });
+        const storeId = storeResult.rows[0].id;
+
+        const result = await pool.query("DELETE FROM categories WHERE id = $1 AND store_id = $2 RETURNING id", [categoryId, storeId]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "الفئة غير موجودة أو لا تملك صلاحية حذفها" });
+        }
+        res.json({ message: "تم حذف الفئة بنجاح" });
+    } catch (err) {
+        console.error("❌ Delete Category Error:", err);
+        res.status(500).json({ error: "فشل حذف الفئة" });
+    }
+});
+
+
+// ==========================================
+// Vendors: Products APIs
+// ==========================================
+
+// 1. جلب المنتجات (مع اسم الفئة)
 app.get('/api/vendor/products', authenticateToken, authorizeSeller, async (req, res) => {
     try {
         const vendorId = req.user.id;
@@ -396,11 +615,90 @@ app.get('/api/vendor/products', authenticateToken, authorizeSeller, async (req, 
         if (storeResult.rows.length === 0) return res.status(404).json({ error: "المتجر غير موجود" });
         const storeId = storeResult.rows[0].id;
 
-        const result = await pool.query("SELECT * FROM products WHERE store_id = $1 ORDER BY id DESC", [storeId]);
+        const query = `
+            SELECT p.*, c.name as category_name
+            FROM products p
+            LEFT JOIN categories c ON p.category_id = c.id
+            WHERE p.store_id = $1
+            ORDER BY p.id DESC
+        `;
+        const result = await pool.query(query, [storeId]);
         res.json(result.rows);
     } catch (err) {
         console.error("❌ Vendor Fetch Products Error:", err);
         res.status(500).json({ error: "فشل جلب المنتجات الخاصة بك" });
+    }
+});
+
+// 2. إضافة منتج
+app.post('/api/vendor/products', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const { name, description, price, category_id, image_url, colors, sizes, stock_count, is_active } = req.body;
+        
+        if (!name || price === undefined) return res.status(400).json({ error: "الاسم والسعر مطلوبان" });
+
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "المتجر غير موجود" });
+        const storeId = storeResult.rows[0].id;
+
+        const result = await pool.query(
+            `INSERT INTO products (store_id, category_id, name, description, price, image_url, colors, sizes, stock_count, is_active) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+            [storeId, category_id || null, name, description || null, price, image_url || null, colors || null, sizes || null, stock_count || 0, is_active !== false]
+        );
+        res.status(201).json({ message: "تم إضافة المنتج بنجاح", product: result.rows[0] });
+    } catch (err) {
+        console.error("❌ Add Product Error:", err);
+        res.status(500).json({ error: "فشل إضافة المنتج" });
+    }
+});
+
+// 3. تعديل منتج
+app.put('/api/vendor/products/:id', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const productId = req.params.id;
+        const { name, description, price, category_id, image_url, colors, sizes, stock_count, is_active } = req.body;
+
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "المتجر غير موجود" });
+        const storeId = storeResult.rows[0].id;
+
+        const prodCheck = await pool.query("SELECT id FROM products WHERE id = $1 AND store_id = $2", [productId, storeId]);
+        if(prodCheck.rows.length === 0) return res.status(404).json({ error: "المنتج غير موجود أو لا تملك صلاحية تعديله" });
+
+        const result = await pool.query(
+            `UPDATE products 
+             SET name = $1, description = $2, price = $3, category_id = $4, image_url = $5, colors = $6, sizes = $7, stock_count = $8, is_active = $9 
+             WHERE id = $10 RETURNING *`,
+            [name, description, price, category_id || null, image_url, colors, sizes, stock_count, is_active, productId]
+        );
+        res.json({ message: "تم تعديل المنتج بنجاح", product: result.rows[0] });
+    } catch (err) {
+        console.error("❌ Update Product Error:", err);
+        res.status(500).json({ error: "فشل تعديل المنتج" });
+    }
+});
+
+// 4. حذف منتج
+app.delete('/api/vendor/products/:id', authenticateToken, authorizeSeller, async (req, res) => {
+    try {
+        const vendorId = req.user.id;
+        const productId = req.params.id;
+        
+        const storeResult = await pool.query("SELECT id FROM stores WHERE owner_id = $1", [vendorId]);
+        if (storeResult.rows.length === 0) return res.status(404).json({ error: "المتجر غير موجود" });
+        const storeId = storeResult.rows[0].id;
+
+        const result = await pool.query("DELETE FROM products WHERE id = $1 AND store_id = $2 RETURNING id", [productId, storeId]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "المنتج غير موجود أو لا تملك صلاحية حذفه" });
+        }
+        res.json({ message: "تم حذف المنتج بنجاح" });
+    } catch (err) {
+        console.error("❌ Delete Product Error:", err);
+        res.status(500).json({ error: "فشل حذف المنتج" });
     }
 });
 
