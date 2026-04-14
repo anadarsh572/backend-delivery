@@ -86,70 +86,192 @@ const updateDatabaseSchema = async () => {
             `ALTER TABLE stores ALTER COLUMN owner_id DROP NOT NULL;`,
             `ALTER TABLE stores ALTER COLUMN category DROP NOT NULL;`,
             
-            // =========================================
-            // PURE ERP AND POS ARCHITECTURE
-            // =========================================
+            // --- Orders Table Fix ---
+            `CREATE TABLE IF NOT EXISTS orders (id SERIAL PRIMARY KEY);`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS user_id INTEGER;`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS store_id INTEGER;`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS total_price NUMERIC(10,2);`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_name CHARACTER VARYING(255);`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_phone CHARACTER VARYING(50);`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_address TEXT;`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method CHARACTER VARYING(50) DEFAULT 'cash';`,
+            `ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`,
             
-            // --- 1. Products ERP Table ---
-            `CREATE TABLE IF NOT EXISTS products (id SERIAL PRIMARY KEY);`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE;`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS barcode VARCHAR(255);`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS purchase_price NUMERIC(10,2) DEFAULT 0;`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS selling_price NUMERIC(10,2) DEFAULT 0;`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS current_stock INTEGER DEFAULT 0;`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS min_stock INTEGER DEFAULT 5;`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;`,
-            `ALTER TABLE products ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`,
-            
-            // Re-map constraints and cleanups
-            `DO $$ BEGIN 
-                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='price') THEN 
-                    UPDATE products SET selling_price = price WHERE selling_price = 0;
-                    ALTER TABLE products DROP COLUMN price;
+            // --- الحماية من الأعمدة القديمة اللي ممكن تعطل الشغل (Fix NOT NULL constraints) ---
+            `DO $$ 
+            BEGIN 
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='delivery_address') THEN 
+                    ALTER TABLE orders ALTER COLUMN delivery_address DROP NOT NULL;
                 END IF;
-                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='products' AND column_name='stock_count') THEN 
-                    UPDATE products SET current_stock = stock_count WHERE current_stock = 0;
-                    ALTER TABLE products DROP COLUMN stock_count;
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='phone') THEN 
+                    ALTER TABLE orders ALTER COLUMN phone DROP NOT NULL;
+                END IF;
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='address') THEN 
+                    ALTER TABLE orders ALTER COLUMN address DROP NOT NULL;
+                END IF;
+            END $$;`,
+            
+            `DO $$ 
+            BEGIN 
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='stores' AND column_name='store_name') THEN 
+                    UPDATE stores SET name = store_name WHERE name IS NULL;
+                    EXECUTE 'ALTER TABLE stores ALTER COLUMN store_name DROP NOT NULL';
+                END IF; 
+            END $$;`,
+            `DO $$ 
+            BEGIN 
+                -- Rename vendor_id back to store_id in orders table for consistency
+                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='vendor_id') THEN 
+                    ALTER TABLE orders RENAME COLUMN vendor_id TO store_id;
+                END IF;
+
+                -- Add payment_method column with default value
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='payment_method') THEN 
+                    ALTER TABLE orders ADD COLUMN payment_method CHARACTER VARYING(50) DEFAULT 'Cash on Delivery';
+                END IF;
+
+                -- Alignment for new strict mapping
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='customer_phone') THEN 
+                    ALTER TABLE orders ADD COLUMN customer_phone CHARACTER VARYING(20);
+                    -- Migrate existing data if phone exists
+                    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='phone') THEN
+                        UPDATE orders SET customer_phone = phone WHERE customer_phone IS NULL;
+                    END IF;
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='customer_address') THEN 
+                    ALTER TABLE orders ADD COLUMN customer_address TEXT;
+                    -- Migrate existing data if address exists
+                    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='address') THEN
+                        UPDATE orders SET customer_address = address WHERE customer_address IS NULL;
+                    END IF;
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='items_price') THEN 
+                    ALTER TABLE orders ADD COLUMN items_price NUMERIC(10,2);
+                END IF;
+
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='delivery_fee') THEN 
+                    ALTER TABLE orders ADD COLUMN delivery_fee NUMERIC(10,2) DEFAULT 15;
+                END IF;
+
+                -- Add status column if not exists
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='status') THEN 
+                    ALTER TABLE orders ADD COLUMN status CHARACTER VARYING(50) DEFAULT 'Pending';
+                END IF;
+
+                -- Add items column if not exists (for storing order contents)
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='items') THEN 
+                    ALTER TABLE orders ADD COLUMN items TEXT;
                 END IF;
             END $$;`,
 
-            // --- 2. Sales Table (Replaces Orders for Internal POS logic) ---
-            `CREATE TABLE IF NOT EXISTS sales (
+            // --- Categories Table ---
+            `CREATE TABLE IF NOT EXISTS categories (
                 id SERIAL PRIMARY KEY,
                 store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE,
-                total_amount NUMERIC(10,2) NOT NULL,
-                profit_margin NUMERIC(10,2) DEFAULT 0,
-                items_sold TEXT, -- JSON serialization representing barcode, qty, and price
+                name CHARACTER VARYING(255) NOT NULL,
+                image_url TEXT,
+                description TEXT,
+                is_active BOOLEAN DEFAULT true,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );`,
 
-            // --- 3. Inventory Logs (Immutable Audit Trail) ---
-            `CREATE TABLE IF NOT EXISTS inventory_logs (
+            // --- Products Table Extensions ---
+            `CREATE TABLE IF NOT EXISTS products (id SERIAL PRIMARY KEY);`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS name CHARACTER VARYING(255);`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS description TEXT;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS price NUMERIC(10,2);`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS colors TEXT;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS sizes TEXT;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS stock_count INTEGER DEFAULT 0;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;`,
+
+            // --- Shipping Rates Table ---
+            `CREATE TABLE IF NOT EXISTS shipping_rates (
                 id SERIAL PRIMARY KEY,
+                store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE,
+                region_id INTEGER,
+                name CHARACTER VARYING(255),
+                price NUMERIC(10,2) DEFAULT 0,
+                active BOOLEAN DEFAULT true
+            );`,
+
+            // --- Users Table Fix ---
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN DEFAULT false;`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS store_category CHARACTER VARYING(100);`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone CHARACTER VARYING(50);`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS address TEXT;`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(10,2) DEFAULT 0;`,
+            `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;`,
+            // Sync is_active and is_blocked if both exist
+            `UPDATE users SET is_active = NOT is_blocked WHERE is_active IS NULL;`,
+
+            // --- Coupons and Reviews Tables ---
+            `CREATE TABLE IF NOT EXISTS coupons (id SERIAL PRIMARY KEY, code VARCHAR(50), discount_percentage NUMERIC(5,2), expiry_date DATE, store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE);`,
+            `CREATE TABLE IF NOT EXISTS reviews (id SERIAL PRIMARY KEY, customer_name VARCHAR(255), rating INTEGER CHECK (rating >= 1 AND rating <= 5), comment TEXT, store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);`,
+
+            // --- Store Settings Updates ---
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS logo_url TEXT;`,
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS display_name VARCHAR(255);`,
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS opening_hours VARCHAR(100);`,
+            `ALTER TABLE stores ADD COLUMN IF NOT EXISTS is_open BOOLEAN DEFAULT true;`,
+
+            // =========================================
+            // SUPERMARKET ARCHITECTURE MODULES
+            // =========================================
+
+            // --- 1. Categories Hierarchy & Barcodes ---
+            `ALTER TABLE categories ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES categories(id) ON DELETE CASCADE;`,
+            `ALTER TABLE products ADD COLUMN IF NOT EXISTS barcode VARCHAR(255);`,
+            `ALTER TABLE products DROP CONSTRAINT IF EXISTS products_barcode_key;`,
+            `ALTER TABLE products ADD CONSTRAINT products_barcode_key UNIQUE (barcode);`,
+
+            // --- 2. Advanced Coupons Table ---
+            `ALTER TABLE coupons ADD COLUMN IF NOT EXISTS max_usages INTEGER DEFAULT 1;`,
+            `ALTER TABLE coupons ADD COLUMN IF NOT EXISTS current_usages INTEGER DEFAULT 0;`,
+            `ALTER TABLE coupons ADD COLUMN IF NOT EXISTS min_order_value NUMERIC(10,2) DEFAULT 0;`,
+            `ALTER TABLE coupons ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true;`,
+            
+            // --- 3. Delivery Agents & Shift Reconciliation ---
+            `CREATE TABLE IF NOT EXISTS delivery_agents (
+                id SERIAL PRIMARY KEY,
+                store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE,
+                name VARCHAR(255) NOT NULL,
+                phone VARCHAR(50) NOT NULL,
+                current_cash_to_remit NUMERIC(10,2) DEFAULT 0,
+                is_active BOOLEAN DEFAULT true
+            );`,
+            `CREATE TABLE IF NOT EXISTS shift_logs (
+                id SERIAL PRIMARY KEY,
+                store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE,
+                opened_by INTEGER REFERENCES users(id),
+                closed_by INTEGER REFERENCES users(id),
+                start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                end_time TIMESTAMP,
+                total_pos_cash NUMERIC(10,2) DEFAULT 0,
+                total_drivers_remitted NUMERIC(10,2) DEFAULT 0,
+                status VARCHAR(50) DEFAULT 'OPEN'
+            );`,
+
+            // --- 4. Inventory Shrinkage (التوالف) ---
+            `CREATE TABLE IF NOT EXISTS inventory_shrinkage_logs (
+                id SERIAL PRIMARY KEY,
+                store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE,
                 product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
-                quantity_changed INTEGER NOT NULL,
-                reason VARCHAR(50) NOT NULL, -- 'POS_SALE', 'PURCHASE_RECEIPT', 'DAMAGE'
+                quantity INTEGER NOT NULL,
+                reason VARCHAR(100) DEFAULT 'EXPIRED',
+                cost_value NUMERIC(10,2) DEFAULT 0,
                 logged_by INTEGER REFERENCES users(id),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );`,
 
-            // --- 4. Purchase Orders (Supplier Re-stocking) ---
-            `CREATE TABLE IF NOT EXISTS purchase_orders (
-                id SERIAL PRIMARY KEY,
-                store_id INTEGER REFERENCES stores(id) ON DELETE CASCADE,
-                supplier_name VARCHAR(255),
-                total_cost NUMERIC(10,2) DEFAULT 0,
-                status VARCHAR(50) DEFAULT 'PENDING',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );`,
-            
-            // --- Clean-up Legacy B2C Tables ---
-            `DROP TABLE IF EXISTS orders CASCADE;`,
-            `DROP TABLE IF EXISTS coupons CASCADE;`,
-            `DROP TABLE IF EXISTS shipping_rates CASCADE;`,
-            `DROP TABLE IF EXISTS delivery_agents CASCADE;`,
-            `DROP TABLE IF EXISTS reviews CASCADE;`,
+            // --- 5. Review Moderation Enhancement ---
+            `ALTER TABLE reviews ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'PENDING';`,
         ];
 
         for (let q of queries) {
