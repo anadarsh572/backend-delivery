@@ -1710,38 +1710,7 @@ app.get('/api/products/category/:categoryName', async (req, res) => {
     }
 });
 
-// ==========================================
-// Public Storefront APIs (Customer Landing)
-// ==========================================
 
-// 1. Fetch Categories (Distinct categories from active stores)
-app.get('/api/public/categories', async (req, res) => {
-    try {
-        const result = await pool.query("SELECT DISTINCT category as name FROM stores WHERE is_active = true AND is_open = true AND category IS NOT NULL");
-        res.json(result.rows);
-    } catch (err) {
-        console.error("❌ Public Categories Error:", err);
-        res.status(500).json({ error: "فشل جلب الفئات" });
-    }
-});
-
-// 2. Fetch Stores
-app.get('/api/public/stores', async (req, res) => {
-    try {
-        const result = await pool.query(`
-            SELECT id, name, display_name, category, logo_url as cover_image, 
-                   COALESCE(opening_hours, 'جاهز في 15 دقيقة') as pickup_time,
-                   4.5 as rating
-            FROM stores 
-            WHERE is_active = true AND is_open = true
-            ORDER BY created_at DESC
-        `);
-        res.json(result.rows);
-    } catch (err) {
-        console.error("❌ Public Stores Error:", err);
-        res.status(500).json({ error: "فشل جلب المتاجر" });
-    }
-});
 
 // --- 19. Global Error Handler (معالجة الأخطاء الشاملة) ---
 // هذا مهم جداً لضمان عدم تعطل السيرفر وإرجاع استجابة JSON دائماً
